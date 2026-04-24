@@ -1,0 +1,5 @@
+The OpenAI Agents SDK is a thin Python framework for building tool-using
+language-model agents. An agent is a model plus a list of function tools; the
+Runner loops until the model produces a final answer or one of a declared set
+of "stop" tools is called. Tools are plain Python functions decorated with
+@function_tool; their docstrings feed the JSON schema presented to the model.

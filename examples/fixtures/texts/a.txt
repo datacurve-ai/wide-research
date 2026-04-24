@@ -1,0 +1,5 @@
+Modal is a serverless cloud platform that lets developers run Python functions
+on remote compute. It abstracts away containers and orchestration: you decorate
+a function with an image and resource spec, and calling it runs it on the cloud.
+Modal's Sandbox API exposes a container-as-a-service primitive with direct
+filesystem access, exec streams, and optional GPUs.

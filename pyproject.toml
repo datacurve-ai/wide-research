@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wide-research"
+version = "0.2.0"
+description = "Run one OpenAI agent per input across N parallel Modal sandboxes, and aggregate structured results (plus returned files/folders) locally."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Datacurve" }]
+keywords = ["modal", "openai-agents", "sandbox", "agent", "batch", "map"]
+
+dependencies = [
+    # CLI + output rendering
+    "typer>=0.12",
+    "rich>=13.7",
+    # Config + templating
+    "pydantic>=2.7",
+    "jinja2>=3.1",
+    "tomli-w>=1.0",         # writer; reader is stdlib `tomllib` (Py 3.11+)
+    "python-dotenv>=1.0",
+    # Execution
+    "modal>=1.3",
+    "openai-agents>=0.14",
+    "openai>=1.40",
+    "anyio>=4.4",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+wide-research = "wide_research.cli:app"
+wr = "wide_research.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/datacurve-ai/wide-research"
+Issues = "https://github.com/datacurve-ai/wide-research/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wide_research"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/wide_research",
+    "README.md",
+    "AGENTS.md",
+    "docs/",
+    "examples/",
+    "skills/",
+]

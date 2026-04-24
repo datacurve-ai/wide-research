@@ -1,0 +1,39 @@
+# Minimal smoke-test job. Asks the agent to echo a string back via submit().
+# Good for: verifying Modal sandbox plumbing + OPENAI_API_KEY hookup.
+
+brief = "Tiny smoke test — echoes the input back."
+name = "echo_test"
+title = "Echo Test"
+model = "gpt-5.4-mini"
+target_count = 3
+inputs = ["hello", "world", "wide-research works"]
+parallelism = 3
+# Reasoning models use a few "turns" on internal thinking before the tool call,
+# so we give a modest headroom over the 2-3 real tool turns.
+max_turns = 15
+timeout_seconds = 120
+
+prompt_template = """
+The input string is:
+  {{ input }}
+
+Call the submit tool with success=true and an output object containing:
+  - echo:   the input string, verbatim
+  - length: the input string's character count as an integer
+
+Do not print anything else. Call submit exactly once.
+"""
+
+[[output_schema]]
+name = "echo"
+type = "string"
+title = "Echo"
+description = "The input string, verbatim."
+format = "non-empty string"
+
+[[output_schema]]
+name = "length"
+type = "number"
+title = "Length"
+description = "Character length of the input."
+format = "integer >= 0"

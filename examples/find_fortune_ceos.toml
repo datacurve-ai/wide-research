@@ -1,0 +1,61 @@
+# Example "wide search" job: gather the same fields for each of N entities.
+# Demonstrates: web_search usage, structured output, per-subtask isolation.
+
+brief = "Find each Fortune 100 CEO's name and verified email."
+name = "find_ceo_emails"
+title = "Find each Fortune 100 CEO's name and email"
+target_count = 5
+inputs = [
+    "Apple Inc.",
+    "Microsoft",
+    "Alphabet (Google)",
+    "Amazon",
+    "Meta",
+]
+parallelism = 5
+max_turns = 30
+timeout_seconds = 900
+
+prompt_template = """
+You are researching the current CEO of the company: {{ input }}.
+
+Use `web_search` to gather + validate. Be thorough; cross-reference before
+submitting. If you cannot verify, submit with success=false and a short
+explanation.
+
+On success, call:
+  submit(success=true, output={
+    "ceo_name": "...",
+    "ceo_email": "...",
+    "source": "...",
+    "confidence": "high|medium|low"
+  })
+"""
+
+[[output_schema]]
+name = "ceo_name"
+type = "string"
+title = "CEO Name"
+description = "Full legal name of the current CEO."
+format = "First Last (e.g., 'Jane Doe')"
+
+[[output_schema]]
+name = "ceo_email"
+type = "string"
+title = "CEO Email"
+description = "Verified work email address."
+format = "local@domain (e.g., 'jane.doe@apple.com')"
+
+[[output_schema]]
+name = "source"
+type = "string"
+title = "Source"
+description = "URL or citation where the information was verified."
+format = "URL or short citation"
+
+[[output_schema]]
+name = "confidence"
+type = "string"
+title = "Confidence"
+description = "How confident you are in the result."
+format = "one of: high | medium | low"

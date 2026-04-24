@@ -1,0 +1,60 @@
+# Directory-in / directory-out example, in-place edit.
+#
+# Input: a small project directory (via <file>…</file>; tags work for files
+#        AND directories).
+# Output: the *same* directory after modification, returned as a
+#         `directory`-typed field.
+#
+# Demonstrates that the agent can modify mounted files in place — no need
+# to copy under /workspace/output/. wide-research pulls whatever absolute
+# path the agent returns, so the input dir is a perfectly fine output.
+
+brief = "Annotate Python projects in place with a per-module docstring."
+name = "annotate_projects"
+title = "Annotate Python projects"
+target_count = 2
+parallelism = 2
+max_turns = 30
+timeout_seconds = 600
+
+inputs = [
+    "/home/ubuntu/code/wide-research/examples/fixtures/projects/alpha",
+    "/home/ubuntu/code/wide-research/examples/fixtures/projects/beta",
+]
+
+prompt_template = """
+The input project directory is at <file>{{ input }}</file> (that's its
+sandbox path — use it verbatim below).
+
+Modify the project in place:
+  - Prepend a one-line docstring describing the module to every .py file.
+  - Write a stats.json at the project root with:
+      {"files": <total file count>, "py_files": <int>, "total_lines": <int>}
+
+Then call:
+  submit(success=true, output={
+    "annotated_project": "<the sandbox path from the <file> tag>",
+    "py_files": <int>,
+    "total_lines": <int>
+  })
+"""
+
+[[output_schema]]
+name = "annotated_project"
+type = "directory"
+title = "Annotated Project"
+description = "The project with a one-line docstring prepended to each .py file."
+
+[[output_schema]]
+name = "py_files"
+type = "number"
+title = "Python File Count"
+description = "How many .py files the project contained."
+format = "integer >= 0"
+
+[[output_schema]]
+name = "total_lines"
+type = "number"
+title = "Total Lines"
+description = "Total line count across all files."
+format = "integer >= 0"

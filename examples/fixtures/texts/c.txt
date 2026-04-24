@@ -1,0 +1,5 @@
+CTRF (Common Test Result Format) is a vendor-neutral JSON schema for
+representing test results. It normalises the shape of pass/fail/skip data
+across frameworks (pytest, go test, vitest, etc.) so that downstream tools —
+dashboards, scorers, CI summaries — can consume one format rather than
+N bespoke reporter outputs.

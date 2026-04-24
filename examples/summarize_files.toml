@@ -1,0 +1,52 @@
+# File-in / file-out example.
+#
+# Input: a text file (passed via <file>…</file>).
+# Output: a summary written to a file; the agent returns the sandbox path,
+#         and the host downloads it into the run dir.
+
+brief = "Summarise one text document per subtask."
+name = "summarize_files"
+title = "Summarise text files"
+target_count = 3
+parallelism = 3
+max_turns = 20
+timeout_seconds = 300
+
+inputs = [
+    "/home/ubuntu/code/wide-research/examples/fixtures/texts/a.txt",
+    "/home/ubuntu/code/wide-research/examples/fixtures/texts/b.txt",
+    "/home/ubuntu/code/wide-research/examples/fixtures/texts/c.txt",
+]
+
+prompt_template = """
+Read the document at <file>{{ input }}</file>.
+
+1. Write a 3-sentence summary to /workspace/output/summary.md, plain
+   markdown, no heading.
+2. Count the words in the original document (use `wc -w`).
+3. Call submit(success=true, output={
+     "summary_file": "/workspace/output/summary.md",
+     "word_count": <integer>,
+     "one_liner": "<single-sentence gist, ≤ 140 chars>"
+   }).
+"""
+
+[[output_schema]]
+name = "summary_file"
+type = "file"
+title = "Summary File"
+description = "Markdown summary of the document (3 sentences)."
+
+[[output_schema]]
+name = "word_count"
+type = "number"
+title = "Word Count"
+description = "Number of words in the original document."
+format = "integer >= 0"
+
+[[output_schema]]
+name = "one_liner"
+type = "string"
+title = "One-liner"
+description = "Single-sentence gist of the document."
+format = "string, ≤ 140 chars"
