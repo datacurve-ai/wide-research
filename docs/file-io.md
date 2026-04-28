@@ -110,6 +110,7 @@ local path. `results.csv` gets the local path in that column too.
   state/0000.json  …
   subtasks/
     0000/
+      trajectory.jsonl     # streamed agent events (Responses API item shape)
       <file_field>.md      # e.g. summary_file.md
       <dir_field>/         # e.g. annotated_project/ (its contents)
     0001/
@@ -148,10 +149,10 @@ If you're bumping into these, consider:
 
 - **No filesystem access** outside the mounts above. `~/.ssh`,
   `/etc/hosts`, your code checkouts — none of it is visible.
-- **No credentials** from your shell, except `OPENAI_API_KEY` +
-  `OPENAI_ORG_ID` / `OPENAI_PROJECT` (auto-passed so the agent can call
-  OpenAI). Everything else has to come through `secrets` (Modal-managed)
-  or `mount_files`.
+- **No credentials** from your shell are copied into the sandbox. The
+  OpenAI key stays with the host-side Agent runner. Any credential the
+  sandbox should read must be explicitly provided through `secrets`
+  (Modal-managed) or `mount_files`.
 - **No shared disk between subtasks.** Subtask 3's files are unreachable
   from subtask 4. That's the whole point of the fan-out.
 - **No implicit output capture.** If the agent writes a file and doesn't

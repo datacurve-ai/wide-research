@@ -18,8 +18,8 @@ from wide_research.config import SandboxImage
 # sandbox-side `experimental_options={"enable_docker": True}` path.
 _DIND_BUILDER_VERSION = "2025.06"
 _DIND_APT = (
-    "wget", "ca-certificates", "curl", "net-tools", "iproute2", "iptables-legacy",
-    "docker.io", "docker-buildx-plugin", "docker-compose-plugin",
+    "wget", "ca-certificates", "curl", "net-tools", "iproute2", "iptables",
+    "docker.io",
 )
 
 # start_dockerd.sh ships with this package (runtime/ is just a data directory now).
@@ -80,5 +80,11 @@ def _run_commands(img: modal.Image, spec: SandboxImage) -> modal.Image:
             "chmod +x /start-dockerd.sh",
             "update-alternatives --set iptables  /usr/sbin/iptables-legacy",
             "update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy",
+            # Debian's docker.io omits the Compose v2 plugin. Install the
+            # official static binary so `docker compose ...` works.
+            "mkdir -p /usr/local/lib/docker/cli-plugins",
+            "curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose "
+            "https://github.com/docker/compose/releases/download/v2.31.0/docker-compose-linux-x86_64",
+            "chmod +x /usr/local/lib/docker/cli-plugins/docker-compose",
         ] + commands
     return img.run_commands(*commands) if commands else img

@@ -2,7 +2,8 @@
 
 File / directory outputs already live under `<run>/subtasks/NNNN/` by the time
 we get here (see `runner._collect_outputs`). We just point at them from the
-results files; no zipping or copying."""
+results files; no zipping or copying. Also emits `summary.json` with cost
+and token totals for the whole run."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import json
 from pathlib import Path
 
 from wide_research.config import WideResearchConfig
+from wide_research.cost import CostBreakdown, sum_costs
 from wide_research.orchestrator import SubtaskResult
 
 
@@ -40,6 +42,9 @@ def write_results(
             }
             jf.write(json.dumps(record, default=str) + "\n")
 
+    summary_path = run_dir / "summary.json"
+    summary_path.write_text(json.dumps(_build_summary(cfg, results), indent=2))
+
     header = ["index", "input", "success", "error", *schema_names]
     with csv_path.open("w", newline="") as cf:
         w = csv.writer(cf)
@@ -59,4 +64,37 @@ def write_results(
                 row.append(v)
             w.writerow(row)
 
-    return {"jsonl": jsonl_path, "csv": csv_path}
+    return {"jsonl": jsonl_path, "csv": csv_path, "summary": summary_path}
+
+
+def _build_summary(
+    cfg: WideResearchConfig,
+    results: list[SubtaskResult],
+) -> dict[str, object]:
+    breakdowns: list[CostBreakdown] = []
+    for r in results:
+        cost = (r.payload.get("meta") or {}).get("cost")
+        if not cost:
+            continue
+        try:
+            breakdowns.append(CostBreakdown(**cost))
+        except TypeError:
+            continue
+    totals = sum_costs(breakdowns)
+
+    ok = sum(1 for r in results if r.payload.get("success"))
+    wall = [
+        (r.payload.get("meta") or {}).get("wall_seconds", 0.0) or 0.0
+        for r in results
+    ]
+    return {
+        "name": cfg.name,
+        "title": cfg.title,
+        "model": cfg.model,
+        "target_count": cfg.target_count,
+        "succeeded": ok,
+        "failed": len(results) - ok,
+        "wall_seconds_max": max(wall, default=0.0),
+        "wall_seconds_sum": sum(wall),
+        "cost": totals,
+    }

@@ -70,10 +70,17 @@ def _repo_env_if_source_install() -> Path | None:
 
 
 def _load_env(extra: Path | None = None) -> None:
-    """Load .env in priority order (first hit wins per var)."""
-    for p in (extra, Path.cwd() / ".env", paths.tool_home() / ".env", _repo_env_if_source_install()):
+    """Load .env files from lowest to highest priority.
+
+    Effective precedence:
+    --env-file > CWD .env > ~/.wide-research/.env > shell env > repo .env.
+    """
+    repo_env = _repo_env_if_source_install()
+    if repo_env and repo_env.exists():
+        load_dotenv(repo_env, override=False)
+    for p in (paths.tool_home() / ".env", Path.cwd() / ".env", extra):
         if p and p.exists():
-            load_dotenv(p, override=False)
+            load_dotenv(p, override=True)
 
 
 def _load_config(
@@ -164,16 +171,25 @@ def cmd_run(
     env_file: Path | None = typer.Option(None, "--env-file", help="Load OPENAI_API_KEY etc. from this file."),
     foreground: bool = typer.Option(
         False, "--foreground", "-f",
-        help="Run synchronously in this terminal instead of detaching.",
+        help="Run synchronously in this terminal; don't detach.",
+    ),
+    detach: bool = typer.Option(
+        False, "--detach", "-d",
+        help="Detach and exit immediately without tailing the run.",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Run a wide-research job (TOML from file, stdin, or --inline).
 
-    Default: spawn the run as a detached background process, print pointers
-    (run dir + log file + tail/wait hints), exit immediately. Use
-    `--foreground` / `-f` to block this terminal until the run finishes.
+    Default: spawn the run as a detached background process, then attach a
+    tail in THIS terminal. Ctrl+C the tail to leave the worker running in
+    the background — it'll tell you how to stop it later. `--foreground`
+    runs in-process (no worker child). `--detach` spawns and exits
+    immediately without tailing.
     """
+    if foreground and detach:
+        console.print("[red]error:[/red] --foreground and --detach are mutually exclusive")
+        raise typer.Exit(2)
     _load_env(env_file)
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
@@ -195,14 +211,23 @@ def cmd_run(
 
     if foreground:
         _run_foreground(cfg, run_dir)
-    else:
-        _run_detached(run_dir)
+        return
+    pid = _run_detached(run_dir)
+    if detach:
+        return
+    _attach_tail(run_dir, pid)
 
 
 def _run_foreground(cfg: WideResearchConfig, run_dir: Path) -> None:
     console.print(f"[bold]run dir:[/bold] {run_dir}")
+
+    def _on_ready(_info: dict) -> None:
+        _print_modal_banner(run_dir)
+
     try:
-        results = asyncio.run(orchestrator.run(cfg, run_dir=run_dir))
+        results = asyncio.run(
+            orchestrator.run(cfg, run_dir=run_dir, on_modal_ready=_on_ready)
+        )
     except KeyboardInterrupt:
         console.print("[yellow]interrupted — partial results may be on Modal[/yellow]")
         raise typer.Exit(130)
@@ -210,10 +235,50 @@ def _run_foreground(cfg: WideResearchConfig, run_dir: Path) -> None:
     _print_summary(cfg, results, run_dir, artifacts)
 
 
-def _run_detached(run_dir: Path) -> None:
+def _print_modal_banner(run_dir: Path) -> None:
+    manifest = run_dir / "modal.json"
+    if not manifest.exists():
+        return
+    try:
+        info = json.loads(manifest.read_text())
+    except Exception:  # noqa: BLE001
+        return
+    bits = []
+    if info.get("app_name"):
+        bits.append(f"app={info['app_name']}")
+    if info.get("environment"):
+        bits.append(f"env={info['environment']}")
+    if info.get("profile"):
+        bits.append(f"profile={info['profile']}")
+    if bits:
+        console.print(f"[dim]modal:[/dim] {' · '.join(bits)}")
+    if info.get("dashboard_url"):
+        console.print(f"[dim]dashboard:[/dim] {info['dashboard_url']}")
+
+
+def _wait_and_print_modal_banner(
+    run_dir: Path, pid: int, *, timeout: float = 15.0, poll: float = 0.2
+) -> None:
+    """Poll briefly for the worker to write modal.json, then print the
+    banner. Bails out early if the worker exits or the timeout elapses —
+    we never want to block the tail on a stuck startup."""
+    manifest = run_dir / "modal.json"
+    failed = run_dir / "WORKER_FAILED"
+    t0 = time.time()
+    while not manifest.exists():
+        if failed.exists() or not _pid_alive(pid):
+            return
+        if (time.time() - t0) > timeout:
+            return
+        time.sleep(poll)
+    _print_modal_banner(run_dir)
+
+
+def _run_detached(run_dir: Path) -> int:
     """Spawn `python -m wide_research._worker RUN_DIR` as a session leader,
-    redirect its stdout/stderr to `<run_dir>/worker.log`, and detach. Print
-    abs paths + PID + `wr tail` / `wr wait` hints for the caller."""
+    redirect its stdout/stderr to `<run_dir>/worker.log`, and detach. Returns
+    the child PID. Also prints a short banner so the user knows where things
+    went."""
     worker_log = run_dir / "worker.log"
     pid_path = run_dir / "worker.pid"
     log_handle = open(worker_log, "w", buffering=1)
@@ -232,11 +297,64 @@ def _run_detached(run_dir: Path) -> None:
 
     console.print(f"[bold]run dir:[/bold] {run_dir}")
     console.print(f"[bold]pid:[/bold]     {proc.pid}")
+    return proc.pid
+
+
+def _attach_tail(run_dir: Path, pid: int) -> None:
+    """Tail the run locally. Ctrl+C the tail → the worker keeps running and
+    we print how to stop it. Exits non-zero if any subtask fails, matching
+    `wr wait` semantics."""
     console.print()
-    console.print(f"  wr tail {run_dir}    [dim]# watch what each subtask is doing[/dim]")
-    console.print(f"  wr wait {run_dir}    [dim]# block for the final pass/fail summary[/dim]")
-    console.print(f"  wr stop {run_dir}    [dim]# stop gracefully (tears down every Modal sandbox)[/dim]")
-    console.print(f"  tail -f {worker_log} [dim]# low-level worker log (API calls etc.)[/dim]")
+    _wait_and_print_modal_banner(run_dir, pid)
+    try:
+        _tail_loop(run_dir)
+    except KeyboardInterrupt:
+        still_running = _pid_alive(pid)
+        console.print()
+        if still_running:
+            console.print(
+                "[yellow]tail detached — worker is still running in the background.[/yellow]\n"
+                f"  wr tail {run_dir}    [dim]# reattach[/dim]\n"
+                f"  wr wait {run_dir}    [dim]# block for the final summary[/dim]\n"
+                f"  wr stop {run_dir}    [dim]# stop it now (tears down every Modal sandbox)[/dim]"
+            )
+            raise typer.Exit(130)
+        console.print(f"[dim]worker already exited — inspect {run_dir/'worker.log'}[/dim]")
+        raise typer.Exit(130)
+    # tail finished normally → summarise + return pass/fail.
+    results_path = run_dir / "results.jsonl"
+    if not results_path.exists():
+        console.print(f"[yellow]no results.jsonl at {results_path}[/yellow]")
+        raise typer.Exit(1)
+    rows = [json.loads(line) for line in results_path.open() if line.strip()]
+    ok = sum(1 for r in rows if r.get("success"))
+    _print_cost_banner(run_dir)
+    color = "green" if ok == len(rows) else ("yellow" if ok else "red")
+    console.print(f"[{color}]{ok}/{len(rows)}[/{color}] succeeded — {run_dir}")
+    raise typer.Exit(0 if ok == len(rows) else 1)
+
+
+def _print_cost_banner(run_dir: Path) -> None:
+    summary = run_dir / "summary.json"
+    if not summary.exists():
+        return
+    try:
+        s = json.loads(summary.read_text())
+        c = s.get("cost") or {}
+    except Exception:  # noqa: BLE001
+        return
+    cost = c.get("cost_usd")
+    tokens = c.get("total_tokens")
+    unpriced = c.get("unpriced_subtasks") or 0
+    parts = []
+    if cost is not None:
+        parts.append(f"${cost:.4f}")
+    if tokens:
+        parts.append(f"{tokens:,} tokens")
+    if unpriced:
+        parts.append(f"{unpriced} subtasks unpriced")
+    if parts:
+        console.print(f"[dim]cost:[/dim] {' · '.join(parts)}")
 
 
 @app.command("plan")
@@ -298,7 +416,17 @@ def cmd_tail(
     poll: float = typer.Option(0.3, "--poll", help="Seconds between polls."),
 ) -> None:
     """Merge-tail per-subtask logs until the run completes."""
+    _tail_loop(run_dir, poll=poll)
+
+
+def _tail_loop(run_dir: Path, *, poll: float = 0.3) -> None:
+    """Shared merge-tail implementation for `cmd_tail` + the auto-tail path.
+
+    Returns normally on clean completion / crash / stop. KeyboardInterrupt
+    propagates to the caller so the auto-tail path can differentiate."""
     done = run_dir / "results.jsonl"
+    failed = run_dir / "WORKER_FAILED"
+    stopped = run_dir / "WORKER_STOPPED"
     positions: dict[Path, int] = {}
 
     def _drain() -> None:
@@ -324,8 +452,6 @@ def cmd_tail(
             for line in chunk.splitlines():
                 console.print(f"[dim][{tag}][/dim] {line}")
 
-    failed = run_dir / "WORKER_FAILED"
-    stopped = run_dir / "WORKER_STOPPED"
     while True:
         _drain()
         if done.exists():
@@ -483,6 +609,7 @@ def _print_summary(cfg, results, run_dir, artifacts) -> None:
     console.rule(f"done: {ok}/{len(results)} succeeded")
     for name, p in artifacts.items():
         console.print(f"  {name}: {p}")
+    _print_cost_banner(run_dir)
     fails = [r for r in results if not r.payload.get("success")]
     if fails:
         console.print(f"[yellow]{len(fails)} failed — see logs in {run_dir/'logs'}[/yellow]")

@@ -78,7 +78,9 @@ or folders.
   request-based scheduling. Containers burst above the request when the
   worker has capacity — no hard floors of our own.
 - **Secrets**: `.env` auto-loaded from `--env-file` → CWD `.env` →
-  `~/.wide-research/.env` → repo `.env` (source installs).
+  `~/.wide-research/.env` → shell env → repo `.env` (source installs).
+  OpenAI credentials stay host-side; Modal `secrets = [...]` are explicit
+  sandbox env vars only.
 
 ## Adding a skill (for this repo's skills/ dir)
 

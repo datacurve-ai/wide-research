@@ -18,4 +18,4 @@ iptables-legacy -t nat -A POSTROUTING -o "$dev" -j SNAT --to-source "$addr" -p u
 update-alternatives --set iptables  /usr/sbin/iptables-legacy
 update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
 
-exec /usr/bin/dockerd --iptables=false --ip6tables=false --log-level=warn
+exec dockerd --iptables=false --ip6tables=false --log-level=warn

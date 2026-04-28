@@ -138,6 +138,26 @@ pull per field, landing at a predictable name under the subtask's dir:
 No scratch files in the sandbox, no random-hash filenames, no per-field
 zip. `results.jsonl` / `results.csv` get the local paths rewritten in.
 
+## Trajectories
+
+The agent loop runs via `Runner.run_streamed(...)`. Every semantic event
+the SDK emits — agent updates, message outputs, tool calls, tool outputs,
+reasoning items, web-search calls — is appended as a single JSON line to:
+
+```
+<run>/subtasks/<NNNN>/trajectory.jsonl
+```
+
+The file is line-buffered so it streams during a long subtask (`tail -f`
+works). Each row's `item` field is the underlying OpenAI Responses API
+item dict (`item.to_input_item()`), so the file is the same shape the
+model itself produced/consumed and is replayable as Responses input.
+
+Token-level deltas (`raw_response_event`) are deliberately skipped; the
+on-disk schema isn't stable and they balloon file size. The first row is
+a `run_started` envelope (model, max_turns, timeout, prompt) and the
+last row is `run_finished` (error or null + aggregated `Usage`).
+
 ## Docker-in-Docker
 
 When `image.enable_docker: true`:

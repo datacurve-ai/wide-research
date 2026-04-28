@@ -12,7 +12,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import modal
 
@@ -45,8 +45,17 @@ class SubtaskResult:
 # ── Public entry point ──────────────────────────────────────────────────────
 
 
-async def run(cfg: WideResearchConfig, *, run_dir: Path) -> list[SubtaskResult]:
-    """Execute every subtask. Returns results in input order."""
+async def run(
+    cfg: WideResearchConfig,
+    *,
+    run_dir: Path,
+    on_modal_ready: Callable[[dict[str, Any]], None] | Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+) -> list[SubtaskResult]:
+    """Execute every subtask. Returns results in input order.
+
+    `on_modal_ready` fires as soon as the Modal app is resolved and
+    `modal.json` is written — useful for printing the dashboard URL up
+    front, before subtasks start spinning up."""
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "logs").mkdir(exist_ok=True)
 
@@ -55,11 +64,22 @@ async def run(cfg: WideResearchConfig, *, run_dir: Path) -> list[SubtaskResult]:
     )
     image = build_image(cfg.image)
 
-    env_passthrough = _env_passthrough()
-    if not env_passthrough.get("OPENAI_API_KEY") and not cfg.secrets:
+    env_info = _modal_env_info(app)
+    log.info(
+        "modal app=%s env=%s profile=%s  %s",
+        env_info["app_name"], env_info["environment"], env_info["profile"],
+        env_info["dashboard_url"] or "",
+    )
+    (run_dir / "modal.json").write_text(json.dumps(env_info, indent=2))
+    if on_modal_ready is not None:
+        result = on_modal_ready(env_info)
+        if asyncio.iscoroutine(result):
+            await result
+
+    if not _host_openai_key_present():
         log.warning(
-            "no OPENAI_API_KEY in local env and no `secrets` configured — "
-            "agent runs will likely fail to reach OpenAI"
+            "no OPENAI_API_KEY in local env — agent runs will likely fail "
+            "to reach OpenAI"
         )
 
     specs = _build_specs(cfg)
@@ -70,7 +90,6 @@ async def run(cfg: WideResearchConfig, *, run_dir: Path) -> list[SubtaskResult]:
         image=image,
         resources=cfg.resources,
         secret_names=cfg.secrets,
-        env_passthrough=env_passthrough,
         app_name=cfg.modal_app_name,
         enable_docker=cfg.image.enable_docker,
         sandbox_timeout=cfg.timeout_seconds + 120,  # setup + teardown buffer
@@ -208,13 +227,34 @@ def _fmt_bytes(n: int) -> str:
 # ── Env + state plumbing ────────────────────────────────────────────────────
 
 
-def _env_passthrough() -> dict[str, str]:
-    env: dict[str, str] = {}
-    for key in ("OPENAI_API_KEY", "OPENAI_ORG_ID", "OPENAI_PROJECT"):
-        val = os.environ.get(key)
-        if val:
-            env[key] = val
-    return env
+def _host_openai_key_present() -> bool:
+    return bool(os.environ.get("OPENAI_API_KEY"))
+
+
+def _modal_env_info(app: "modal.App") -> dict[str, str | None]:
+    """Best-effort Modal app/environment metadata for the run manifest.
+
+    All fields fail open to None — we only use this for logging + the
+    manifest, never for routing."""
+    info: dict[str, str | None] = {
+        "app_name": getattr(app, "name", None),
+        "app_id": getattr(app, "_app_id", None) or getattr(app, "app_id", None),
+        "environment": None,
+        "profile": None,
+        "dashboard_url": None,
+    }
+    try:
+        from modal import config as mc
+        info["profile"] = getattr(mc, "_profile", None)
+        try:
+            info["environment"] = mc.config.get("environment")
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception:  # noqa: BLE001
+        pass
+    if info["app_id"]:
+        info["dashboard_url"] = f"https://modal.com/id/{info['app_id']}"
+    return info
 
 
 def _make_state_writer(state_dir: Path):

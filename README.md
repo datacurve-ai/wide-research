@@ -48,7 +48,10 @@ source .venv/bin/activate
   2. `./.env` (current directory)
   3. `~/.wide-research/.env` (recommended for global installs)
   4. shell environment
-  5. Modal secret referenced via `secrets = ["openai-api-key"]` in the TOML
+
+The OpenAI credential is used by the host-side Agent runner and is not
+injected into sandboxes. Use TOML `secrets = [...]` only for credentials that
+the sandbox itself should be able to read.
 
 ### Where things live
 

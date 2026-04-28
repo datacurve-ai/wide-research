@@ -18,8 +18,8 @@ max_turns = 30
 timeout_seconds = 600
 
 inputs = [
-    "/home/ubuntu/code/wide-research/examples/fixtures/projects/alpha",
-    "/home/ubuntu/code/wide-research/examples/fixtures/projects/beta",
+  "/home/ubuntu/code/wide-research/examples/fixtures/projects/alpha",
+  "/home/ubuntu/code/wide-research/examples/fixtures/projects/beta",
 ]
 
 prompt_template = """

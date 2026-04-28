@@ -21,6 +21,9 @@ Call the submit tool with success=true and an output object containing:
   - echo:   the input string, verbatim
   - length: the input string's character count as an integer
 
+The `vibes` field is OPTIONAL — skip it. We test that optional fields
+can be left out.
+
 Do not print anything else. Call submit exactly once.
 """
 
@@ -37,3 +40,11 @@ type = "number"
 title = "Length"
 description = "Character length of the input."
 format = "integer >= 0"
+
+[[output_schema]]
+name = "vibes"
+type = "string"
+title = "Vibes"
+description = "Optional: your gut-feel about the input. Skip this field."
+format = "short string or omitted"
+required = false

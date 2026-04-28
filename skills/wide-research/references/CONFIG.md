@@ -31,12 +31,12 @@ format = "free text is fine"
 | `prompt_template` | string | Jinja2 template; `{{ input }}` is interpolated. May contain `<file>/abs/path</file>` tags. |
 | `target_count` | integer | Must equal `len(inputs)` (guards against truncated pastes). |
 | `inputs` | array of string | One subtask per element. |
-| `output_schema` | array of table | Each entry: `{name, type, title, description, format?}`. `type` ∈ `string`/`number`/`boolean`/`file`/`directory`. Field `name` must be `snake_case`. |
+| `output_schema` | array of table | Each entry: `{name, type, title, description, format?, required?}`. `type` ∈ `string`/`number`/`boolean`/`file`/`directory`. Field `name` must be `snake_case`. `required` defaults to `true`; set `false` to let the agent omit the field (missing file/dir paths are silently skipped during collection). |
 
 ## Optional keys + defaults
 
 ```toml
-model = "gpt-5.4"                 # any model the Agents SDK can resolve
+model = "gpt-5.5"                 # any model the Agents SDK can resolve
 parallelism = 0                   # 0/unset = unbounded (all at once)
 max_turns = 100                   # per subtask
 timeout_seconds = 1800            # per subtask wall clock — NOT the whole batch
@@ -61,7 +61,7 @@ run_commands = []                 # arbitrary shell on top of base + apt + pip
 workdir = "/workspace"
 enable_docker = false
 
-secrets = []                      # Modal secret names, injected as env vars
+secrets = []                      # Modal secret names to expose inside sandboxes
 ```
 
 ### About `timeout_seconds` and `max_turns`
@@ -112,6 +112,7 @@ Final run layout:
   state/0000.json  …
   subtasks/
     0000/
+      trajectory.jsonl       # streamed agent events: messages, tool calls + outputs, reasoning
       <file_field>.md
       <dir_field>/
     0001/

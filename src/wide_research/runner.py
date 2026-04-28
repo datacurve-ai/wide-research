@@ -12,15 +12,25 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
+import posixpath
 import tarfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, TextIO
 
 import modal
-from agents import RunConfig, Runner, function_tool
+from agents import (
+    ModelRetryBackoffSettings,
+    ModelRetrySettings,
+    ModelSettings,
+    RunConfig,
+    Runner,
+    function_tool,
+    retry_policies,
+)
 from agents.agent import StopAtTools
 from agents.extensions.sandbox.modal import (
     ModalImageSelector,
@@ -34,6 +44,7 @@ from agents.sandbox.entries import LocalDir, LocalFile
 from agents.tool import WebSearchTool
 
 from wide_research.config import Resources
+from wide_research.cost import CostBreakdown, estimate as estimate_cost
 
 
 log = logging.getLogger("wide_research.runner")
@@ -77,7 +88,6 @@ class RunEnv:
     image: modal.Image
     resources: Resources
     secret_names: list[str]
-    env_passthrough: dict[str, str]
     app_name: str
     enable_docker: bool
     sandbox_timeout: int
@@ -136,37 +146,56 @@ async def _run(
         notify = _make_state_notifier(state_writer, spec.index)
 
         notify(status="starting", phase="creating_sandbox", wall_s=0.0)
-        secrets = _collect_secrets(env.secret_names, env.env_passthrough)
+        secrets = _collect_secrets(env.secret_names)
         sdk_manifest = SdkManifest(
             root=spec.workdir,
             entries=_manifest_entries_from_uploads(spec.upload_files, spec.workdir),
         )
 
         precreated_sb: modal.Sandbox | None = None
-        if env.enable_docker:
-            precreated_sb = await _precreate_docker_sandbox(
-                spec=spec, env=env, secrets=secrets, emit=emit,
-            )
+        try:
+            if env.enable_docker:
+                precreated_sb = await _precreate_docker_sandbox(
+                    spec=spec, env=env, secrets=secrets, emit=emit,
+                )
 
-        client, options = _build_client(env=env, precreated=precreated_sb)
-        emit("creating session")
-        session = await client.create(manifest=sdk_manifest, options=options)
+            client, options = _build_client(env=env, precreated=precreated_sb)
+            emit("creating session")
+            session = await client.create(manifest=sdk_manifest, options=options)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            msg = f"sandbox_create_failed: {type(exc).__name__}: {exc}"
+            emit(msg)
+            elapsed = time.monotonic() - t_start
+            notify(status="failed", phase="sandbox_create_failed", wall_s=elapsed)
+            return Submission(
+                success=False,
+                output={},
+                error=msg,
+                meta={"wall_seconds": elapsed, "runner_note": msg},
+            )
 
         try:
             notify(status="running", phase="agent_loop")
             sink: dict[str, Any] = {}
-            agent = _build_agent(spec=spec, sink=sink, manifest=sdk_manifest)
+            agent = _build_agent(spec=spec, sink=sink, manifest=sdk_manifest, session=session)
             run_cfg = RunConfig(
                 sandbox=SandboxRunConfig(session=session, manifest=sdk_manifest),
             )
 
-            run_error = await _run_agent_loop(
+            subtask_dir.mkdir(parents=True, exist_ok=True)
+            trajectory_path = subtask_dir / "trajectory.jsonl"
+
+            run_error, usage = await _run_agent_loop(
                 agent=agent,
                 prompt=spec.prompt,
                 run_cfg=run_cfg,
                 max_turns=spec.max_turns,
                 timeout_seconds=spec.timeout_seconds,
                 emit=emit,
+                trajectory_path=trajectory_path,
+                spec=spec,
             )
 
             payload = _payload_from_sink(sink, run_error)
@@ -181,12 +210,31 @@ async def _run(
                     emit=emit,
                 )
 
+            cost = estimate_cost(spec.model, usage) if usage is not None \
+                else CostBreakdown(spec.model, 0, 0, 0, 0, 0, 0, None, False)
+            if cost.cost_usd is not None:
+                emit(
+                    f"cost: ${cost.cost_usd:.4f} "
+                    f"({cost.requests} req, {cost.total_tokens} tok)"
+                )
+            else:
+                emit(
+                    f"cost: ? — no price for {cost.model!r} "
+                    f"({cost.requests} req, {cost.total_tokens} tok)"
+                )
+
             elapsed = time.monotonic() - t_start
-            payload["meta"] = {"wall_seconds": elapsed, "runner_note": run_error}
+            payload["meta"] = {
+                "wall_seconds": elapsed,
+                "runner_note": run_error,
+                "cost": cost.to_dict(),
+            }
             notify(
                 status="completed" if payload.get("success") else "failed",
                 phase="done",
                 wall_s=elapsed,
+                cost_usd=cost.cost_usd,
+                total_tokens=cost.total_tokens,
             )
             return payload
         finally:
@@ -267,17 +315,42 @@ async def _cleanup_session(
 # ── Agent construction + loop ───────────────────────────────────────────────
 
 
+_DEFAULT_RETRY = ModelRetrySettings(
+    max_retries=4,
+    backoff=ModelRetryBackoffSettings(
+        initial_delay=2.0,
+        max_delay=60.0,
+        multiplier=2.0,
+        jitter=True,
+    ),
+    policy=retry_policies.any(
+        retry_policies.network_error(),          # socket/timeout errors
+        retry_policies.provider_suggested(),     # OpenAI says retry
+        retry_policies.retry_after(),            # honor Retry-After header
+        retry_policies.http_status(               # generic transient 5xx / edge
+            [408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524]
+        ),
+    ),
+)
+
+
 def _build_agent(
     *,
     spec: SubtaskSpec,
     sink: dict[str, Any],
     manifest: SdkManifest,
+    session: Any,
 ) -> SandboxAgent:
     return SandboxAgent(
         name=f"{spec.name}/{spec.index}",
         instructions=_system_instructions(spec),
         model=spec.model,
-        tools=[_make_submit_tool(sink), WebSearchTool()],
+        model_settings=ModelSettings(retry=_DEFAULT_RETRY),
+        tools=[
+            _make_submit_tool(sink),
+            _make_wait_for_tool(session),
+            WebSearchTool(),
+        ],
         tool_use_behavior=StopAtTools(stop_at_tool_names=["submit"]),
         default_manifest=manifest,
     )
@@ -291,22 +364,175 @@ async def _run_agent_loop(
     max_turns: int,
     timeout_seconds: int,
     emit: Callable[[str], None],
-) -> str | None:
-    """Returns an error string on timeout/exception, None on clean exit."""
+    trajectory_path: Path,
+    spec: SubtaskSpec,
+) -> tuple[str | None, Any]:
+    """Return `(error_msg_or_None, usage_or_None)`.
+
+    Streams the agent run via `Runner.run_streamed` and records every
+    semantic event (run items, agent updates) to `trajectory_path` as
+    JSON Lines. Each line is line-buffered so the file is tail-friendly
+    while the subtask is in flight.
+
+    `usage` is the Agents SDK `Usage` object aggregated by the context
+    wrapper — captured even on timeout/cancellation so partial cost data
+    still lands in the payload."""
+    trajectory_path.parent.mkdir(parents=True, exist_ok=True)
+    t_wall_0 = time.monotonic()
+    streaming_result: Any = None
+    run_error: str | None = None
+    usage: Any = None
+
+    with trajectory_path.open("w", buffering=1, encoding="utf-8") as tf:
+        _jsonl(tf, {
+            "t_ms": 0,
+            "type": "run_started",
+            "agent": agent.name,
+            "model": spec.model,
+            "subtask_index": spec.index,
+            "subtask_name": spec.name,
+            "max_turns": max_turns,
+            "timeout_seconds": timeout_seconds,
+            "input": prompt,
+        })
+
+        try:
+            streaming_result = Runner.run_streamed(
+                agent, prompt, run_config=run_cfg, max_turns=max_turns,
+            )
+            try:
+                async with asyncio.timeout(timeout_seconds):
+                    async for event in streaming_result.stream_events():
+                        _record_event(tf, event, t_wall_0)
+            except (asyncio.TimeoutError, TimeoutError):
+                run_error = f"timeout after {timeout_seconds}s"
+                emit(run_error)
+                _try_cancel_streaming(streaming_result)
+        except asyncio.CancelledError:
+            _try_cancel_streaming(streaming_result)
+            raise
+        except Exception as exc:  # noqa: BLE001
+            run_error = f"{type(exc).__name__}: {exc}"
+            emit(f"agent error: {run_error}")
+
+        usage = _extract_usage(streaming_result)
+
+        _jsonl(tf, {
+            "t_ms": int((time.monotonic() - t_wall_0) * 1000),
+            "type": "run_finished",
+            "error": run_error,
+            "usage": _usage_to_dict(usage),
+        })
+
+    return run_error, usage
+
+
+def _record_event(tf: TextIO, event: Any, t_wall_0: float) -> None:
+    """Serialize one SDK stream event as a single JSONL row.
+
+    The OpenAI Agents SDK emits three event kinds:
+      - `agent_updated_stream_event` — a (sub)agent has become current.
+      - `run_item_stream_event` — a new RunItem (message, tool call,
+        tool output, reasoning, handoff…) has been produced.
+      - `raw_response_event` — token-level deltas. These are noisy and
+        aren't a stable on-disk shape, so we skip them.
+
+    For run-item events we emit the underlying Responses API item
+    (`item.to_input_item()`) — same dict shape the model produced/
+    consumed — so the file is replayable and reads cleanly against the
+    OpenAI Responses API schema."""
+    t_ms = int((time.monotonic() - t_wall_0) * 1000)
     try:
-        await asyncio.wait_for(
-            Runner.run(agent, prompt, run_config=run_cfg, max_turns=max_turns),
-            timeout=timeout_seconds,
-        )
-        return None
-    except asyncio.TimeoutError:
-        msg = f"timeout after {timeout_seconds}s"
-        emit(msg)
-        return msg
+        ev_type = getattr(event, "type", None)
+        if ev_type == "agent_updated_stream_event":
+            new_agent = getattr(event, "new_agent", None)
+            _jsonl(tf, {
+                "t_ms": t_ms,
+                "type": "agent_updated",
+                "agent": getattr(new_agent, "name", None),
+            })
+        elif ev_type == "run_item_stream_event":
+            item = getattr(event, "item", None)
+            raw: Any = None
+            if item is not None:
+                try:
+                    raw = item.to_input_item()
+                except Exception:  # noqa: BLE001
+                    raw = _safe_dump(getattr(item, "raw_item", None))
+            agent_obj = getattr(item, "agent", None) if item is not None else None
+            _jsonl(tf, {
+                "t_ms": t_ms,
+                "type": "run_item",
+                "name": getattr(event, "name", None),
+                "item_type": getattr(item, "type", None) if item is not None else None,
+                "agent": getattr(agent_obj, "name", None) if agent_obj is not None else None,
+                "item": raw,
+            })
+        # raw_response_event intentionally skipped.
     except Exception as exc:  # noqa: BLE001
-        msg = f"{type(exc).__name__}: {exc}"
-        emit(f"agent error: {msg}")
-        return msg
+        # Never let trajectory recording break the run.
+        _jsonl(tf, {
+            "t_ms": t_ms,
+            "type": "trace_error",
+            "error": f"{type(exc).__name__}: {exc}",
+        })
+
+
+def _jsonl(tf: TextIO, obj: dict[str, Any]) -> None:
+    tf.write(json.dumps(obj, default=str, ensure_ascii=False))
+    tf.write("\n")
+
+
+def _safe_dump(raw: Any) -> Any:
+    """Best-effort conversion of a Responses API object to a JSON-friendly dict."""
+    if raw is None or isinstance(raw, (str, int, float, bool, list, dict)):
+        return raw
+    dump = getattr(raw, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump(exclude_unset=True)
+        except Exception:  # noqa: BLE001
+            return str(raw)
+    return str(raw)
+
+
+def _usage_to_dict(usage: Any) -> dict[str, Any] | None:
+    if usage is None:
+        return None
+    dump = getattr(usage, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump()
+        except Exception:  # noqa: BLE001
+            pass
+    out: dict[str, Any] = {}
+    for key in ("requests", "input_tokens", "output_tokens", "total_tokens"):
+        val = getattr(usage, key, None)
+        if val is not None:
+            out[key] = val
+    return out or None
+
+
+def _try_cancel_streaming(result: Any) -> None:
+    if result is None:
+        return
+    cancel = getattr(result, "cancel", None)
+    if not callable(cancel):
+        return
+    try:
+        cancel()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _extract_usage(result: Any) -> Any:
+    """Pull the aggregate `Usage` off a (streaming or final) RunResult.
+    Fail open to None."""
+    try:
+        ctx = getattr(result, "context_wrapper", None)
+        return getattr(ctx, "usage", None) if ctx is not None else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _payload_from_sink(sink: dict[str, Any], run_error: str | None) -> Submission:
@@ -335,15 +561,17 @@ def _system_instructions(spec: SubtaskSpec) -> str:
         f"You are subtask #{spec.index} of wide-research job {spec.name!r}.",
         f"Brief: {spec.brief}",
         "",
-        "Call `submit(success=true, output={...})` with one key per output "
-        "field listed below. On unrecoverable failure, call "
-        "`submit(success=false, error='...')`. Calling submit ends the task.",
+        "Call `submit(success=true, output={...})` with one key per REQUIRED "
+        "output field listed below. Optional fields may be omitted. On "
+        "unrecoverable failure, call `submit(success=false, error='...')`. "
+        "Calling submit ends the task.",
         "",
         "Output fields:",
     ]
     for f in spec.output_schema:
+        opt = "" if f.get("required", True) else " [optional]"
         lines.append(
-            f"  - {f['name']} ({f['type']}): {f['title']} — {f['description']} "
+            f"  - {f['name']} ({f['type']}){opt}: {f['title']} — {f['description']} "
             f"[format: {f['format']}]"
         )
     lines += [
@@ -355,6 +583,80 @@ def _system_instructions(spec: SubtaskSpec) -> str:
         f"Budget: ≤ {spec.max_turns} turns, ≤ {spec.timeout_seconds}s wall clock.",
     ]
     return "\n".join(lines)
+
+
+def _make_wait_for_tool(session: Any):
+    """A host-side polling tool that blocks the agent until a shell
+    predicate becomes true inside the sandbox (or times out).
+
+    Works around the SDK's 30-second PTY yield cap on `exec_command` /
+    `write_stdin`: this handler runs in the wide-research Python process
+    and internally calls `session.exec(...)` every `poll_interval_s`,
+    so the agent's single tool call can block for arbitrary durations
+    without the sandbox-side session dying."""
+
+    @function_tool(
+        name_override="wait_for",
+        description_override=(
+            "Block up to timeout_s until a shell predicate exits 0 in the sandbox. "
+            "Returns {status: 'ready' | 'timeout' | 'error', elapsed_s, exit_code, "
+            "stdout_tail, stderr_tail}. Use this for long-running conditions like "
+            "waiting for a file to appear or a background process to finish — "
+            "much more reliable than sleep loops via exec_command (which caps at 30s). "
+            "Example: wait_for('test -s /path/to/reward.txt', timeout_s=1500)."
+        ),
+        strict_mode=False,
+    )
+    async def wait_for(
+        shell: str,
+        timeout_s: int = 900,
+        poll_interval_s: int = 10,
+    ) -> dict[str, Any]:
+        import time as _time
+        t0 = _time.monotonic()
+        last_stdout = ""
+        last_stderr = ""
+        last_exit: int | None = None
+        while True:
+            try:
+                result = await session.exec(shell, shell=["/bin/bash", "-c"], timeout=30)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "status": "error",
+                    "elapsed_s": round(_time.monotonic() - t0, 1),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            last_exit = getattr(result, "exit_code", None)
+            raw_stdout = getattr(result, "stdout", b"") or b""
+            raw_stderr = getattr(result, "stderr", b"") or b""
+            if isinstance(raw_stdout, (bytes, bytearray)):
+                raw_stdout = raw_stdout.decode("utf-8", errors="replace")
+            if isinstance(raw_stderr, (bytes, bytearray)):
+                raw_stderr = raw_stderr.decode("utf-8", errors="replace")
+            last_stdout = raw_stdout[-400:]
+            last_stderr = raw_stderr[-400:]
+            elapsed = _time.monotonic() - t0
+            if last_exit == 0:
+                return {
+                    "status": "ready",
+                    "elapsed_s": round(elapsed, 1),
+                    "exit_code": last_exit,
+                    "stdout_tail": last_stdout,
+                    "stderr_tail": last_stderr,
+                }
+            if elapsed >= timeout_s:
+                return {
+                    "status": "timeout",
+                    "elapsed_s": round(elapsed, 1),
+                    "exit_code": last_exit,
+                    "stdout_tail": last_stdout,
+                    "stderr_tail": last_stderr,
+                }
+            await asyncio.sleep(min(poll_interval_s, max(1, timeout_s - elapsed)))
+
+    return wait_for
 
 
 def _make_submit_tool(sink: dict[str, Any]):
@@ -441,15 +743,25 @@ async def _collect_outputs(
             continue
         sb_path = outputs.get(field_spec["name"])
         if not sb_path:
+            if field_spec.get("required", True):
+                emit(f"WARN: required {field_spec['type']} field "
+                     f"{field_spec['name']!r} was not set by the agent")
             continue
         sb_path = str(sb_path)
         try:
             if field_spec["type"] == "file":
                 local = await _pull_file(session, sb_path, subtask_dir, field_spec["name"])
+                detail = _human_size(_safe_size(local))
             else:
                 local = await _pull_dir(session, sb_path, subtask_dir, field_spec["name"])
+                n, total = _dir_stats(local)
+                detail = f"{n} file{'' if n == 1 else 's'}, {_human_size(total)}"
             outputs[field_spec["name"]] = str(local)
-            emit(f"pulled {field_spec['type']:<9} {field_spec['name']} ← {sb_path}")
+            rel = _display_path(local, subtask_dir)
+            emit(
+                f"saved {field_spec['name']} ({field_spec['type']}, {detail}) "
+                f"→ {rel}"
+            )
         except Exception as exc:  # noqa: BLE001
             emit(f"WARN: failed to pull {field_spec['name']} from {sb_path}: {exc}")
     payload["output"] = outputs
@@ -487,8 +799,37 @@ async def _pull_dir(session, sb_path: str, subtask_dir: Path, field_name: str) -
             f"tar {sb_path!r} failed: {result.stderr.decode(errors='replace')[:500]}"
         )
     with tarfile.open(fileobj=io.BytesIO(result.stdout)) as tf:
-        tf.extractall(local)  # noqa: S202 — trusted source
+        _safe_extract_tar(tf, local)
     return local
+
+
+def _safe_extract_tar(tf: tarfile.TarFile, dest: Path) -> None:
+    """Extract regular files and directories without allowing path escapes."""
+    root = dest.resolve()
+    for member in tf.getmembers():
+        target = (root / member.name).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"unsafe tar member path: {member.name!r}") from exc
+
+        if member.isdir():
+            if target.exists() and not target.is_dir():
+                raise ValueError(f"tar directory conflicts with file: {member.name!r}")
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+
+        if not member.isfile():
+            raise ValueError(f"unsupported tar member type: {member.name!r}")
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() and target.is_dir():
+            raise ValueError(f"tar file conflicts with directory: {member.name!r}")
+        src = tf.extractfile(member)
+        if src is None:
+            raise ValueError(f"could not read tar member: {member.name!r}")
+        with src, target.open("wb") as out:
+            out.write(src.read())
 
 
 def _close(reader) -> None:
@@ -500,17 +841,57 @@ def _close(reader) -> None:
             pass
 
 
+def _safe_size(p: Path) -> int:
+    try:
+        return p.stat().st_size
+    except OSError:
+        return 0
+
+
+def _dir_stats(p: Path) -> tuple[int, int]:
+    """Return (file_count, total_bytes) for a directory tree. Symlinks and
+    unreadable entries are skipped silently."""
+    n = 0
+    total = 0
+    for child in p.rglob("*"):
+        if not child.is_file():
+            continue
+        n += 1
+        try:
+            total += child.stat().st_size
+        except OSError:
+            pass
+    return n, total
+
+
+def _human_size(n: int) -> str:
+    """Mirror orchestrator._fmt_bytes — KiB/MiB to match upload warnings."""
+    size = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if size < 1024 or unit == "GiB":
+            return f"{n} B" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GiB"
+
+
+def _display_path(local: Path, subtask_dir: Path) -> str:
+    """Render `local` relative to the run root (e.g. `subtasks/0000/foo.md`).
+
+    Falls back to the absolute path if `subtask_dir` is not the expected
+    `<run>/subtasks/<idx>/` shape (defensive — the orchestrator currently
+    always uses that layout)."""
+    try:
+        run_root = subtask_dir.parent.parent
+        return str(local.relative_to(run_root))
+    except (ValueError, IndexError):
+        return str(local)
+
+
 # ── Small helpers ───────────────────────────────────────────────────────────
 
 
-def _collect_secrets(
-    secret_names: list[str],
-    env_passthrough: dict[str, str],
-) -> list[modal.Secret]:
-    secrets: list[modal.Secret] = [modal.Secret.from_name(n) for n in secret_names]
-    if env_passthrough:
-        secrets.append(modal.Secret.from_dict(env_passthrough))
-    return secrets
+def _collect_secrets(secret_names: list[str]) -> list[modal.Secret]:
+    return [modal.Secret.from_name(n) for n in secret_names]
 
 
 def _make_emitter(logf, index: int) -> Callable[[str], None]:

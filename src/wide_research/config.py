@@ -9,7 +9,7 @@ Example shape (see examples/ for full files):
     brief = "Short description of the operation"
     name = "snake_case_identifier"
     title = "Human Readable Title"
-    model = "gpt-5.4"
+    model = "gpt-5.5"
     target_count = 3
     inputs = ["one", "two", "three"]
 
@@ -39,13 +39,20 @@ _RESERVED_FIELD_NAMES = frozenset({"meta", "_meta", "error", "success"})
 
 
 class OutputField(BaseModel):
-    """One field each subtask must return via `submit(output={...})`."""
+    """One field each subtask may return via `submit(output={...})`.
+
+    Required by default. Set `required = false` to let the agent omit the
+    field — missing file/directory paths are silently skipped during
+    collection, and missing scalar fields land as empty strings in the
+    aggregated CSV.
+    """
 
     name: str
     type: Literal["string", "number", "boolean", "file", "directory"]
     title: str
     description: str
     format: str = "NA"
+    required: bool = True
 
     @field_validator("name")
     @classmethod
@@ -94,7 +101,7 @@ class WideResearchConfig(BaseModel):
     output_schema: list[OutputField]
 
     # ── Optional, with slim defaults ───────────────────────────────────────
-    model: str = "gpt-5.4"
+    model: str = "gpt-5.5"
     parallelism: int | None = None       # None = all at once
     max_turns: int = 100
     timeout_seconds: int = 1800
