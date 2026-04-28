@@ -4,7 +4,7 @@
 brief = "Tiny smoke test — echoes the input back."
 name = "echo_test"
 title = "Echo Test"
-model = "gpt-5.4-mini"
+model = "openai/gpt-5.5"
 target_count = 3
 inputs = ["hello", "world", "wide-research works"]
 parallelism = 3

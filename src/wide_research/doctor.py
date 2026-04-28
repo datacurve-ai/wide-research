@@ -4,6 +4,7 @@ Reports:
 - CLI is importable + version
 - Modal is installed and has a configured token
 - OpenAI credential is reachable (any of: env var, tool-home .env, CWD .env)
+- Optional OpenAI-compatible base URL if configured
 - ~/.wide-research layout is sane
 - A brief summary of where runs will be written
 
@@ -33,6 +34,7 @@ def run_checks() -> list[Check]:
         _check_package(),
         _check_modal_token(),
         _check_openai_key(),
+        _check_openai_base_url(),
         _check_tool_home(),
         _check_runs_root(),
     ]
@@ -77,6 +79,20 @@ def _check_openai_key() -> Check:
         f"set it in {paths.tool_home() / '.env'} (chmod 600), "
         "or export in your shell, or pass --env-file PATH to `wr run`",
     )
+
+
+def _check_openai_base_url() -> Check:
+    # Optional. If present, the OpenAI client/Agents SDK will route through it.
+    if os.environ.get("OPENAI_BASE_URL"):
+        return Check("OPENAI_BASE_URL", True, "present in shell env")
+    for candidate in (
+        Path.cwd() / ".env",
+        paths.tool_home() / ".env",
+    ):
+        if candidate.exists():
+            if dotenv_values(candidate).get("OPENAI_BASE_URL"):
+                return Check("OPENAI_BASE_URL", True, f"{candidate}")
+    return Check("OPENAI_BASE_URL", True, "not set; using OpenAI default")
 
 
 def _check_tool_home() -> Check:

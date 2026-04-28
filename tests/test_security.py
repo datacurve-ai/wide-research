@@ -31,11 +31,18 @@ def test_load_env_precedence(monkeypatch, tmp_path) -> None:
     cwd.mkdir()
 
     repo.write_text("OPENAI_API_KEY=repo\n")
-    (tool_home / ".env").write_text("OPENAI_API_KEY=tool\n")
-    (cwd / ".env").write_text("OPENAI_API_KEY=cwd\n")
-    extra.write_text("OPENAI_API_KEY=extra\n")
+    (tool_home / ".env").write_text(
+        "OPENAI_API_KEY=tool\nOPENAI_BASE_URL=https://tool.example/api/\n"
+    )
+    (cwd / ".env").write_text(
+        "OPENAI_API_KEY=cwd\nOPENAI_BASE_URL=https://cwd.example/api/\n"
+    )
+    extra.write_text(
+        "OPENAI_API_KEY=extra\nOPENAI_BASE_URL=https://extra.example/api/\n"
+    )
 
     monkeypatch.setenv("OPENAI_API_KEY", "shell")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://shell.example/api/")
     monkeypatch.chdir(cwd)
     monkeypatch.setattr(cli, "_repo_env_if_source_install", lambda: repo)
     monkeypatch.setattr(cli.paths, "tool_home", lambda: tool_home)
@@ -43,6 +50,7 @@ def test_load_env_precedence(monkeypatch, tmp_path) -> None:
     cli._load_env(extra)
 
     assert cli.os.environ["OPENAI_API_KEY"] == "extra"
+    assert cli.os.environ["OPENAI_BASE_URL"] == "https://extra.example/api/"
 
 
 def test_collect_secrets_does_not_passthrough_host_openai_key(monkeypatch) -> None:

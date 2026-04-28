@@ -9,7 +9,7 @@ Example shape (see examples/ for full files):
     brief = "Short description of the operation"
     name = "snake_case_identifier"
     title = "Human Readable Title"
-    model = "gpt-5.5"
+    model = "openai/gpt-5.5"
     target_count = 3
     inputs = ["one", "two", "three"]
 
@@ -101,7 +101,7 @@ class WideResearchConfig(BaseModel):
     output_schema: list[OutputField]
 
     # ── Optional, with slim defaults ───────────────────────────────────────
-    model: str = "gpt-5.5"
+    model: str = "openai/gpt-5.5"
     parallelism: int | None = None       # None = all at once
     max_turns: int = 100
     timeout_seconds: int = 1800

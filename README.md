@@ -43,15 +43,15 @@ source .venv/bin/activate
 `wide-research doctor` will tell you what's missing. Short version:
 
 - Modal: `modal token set --token-id … --token-secret …`
-- `OPENAI_API_KEY` — any of (first hit wins):
+- `OPENAI_API_KEY` and optional `OPENAI_BASE_URL` — any of (first hit wins):
   1. `--env-file PATH`
   2. `./.env` (current directory)
   3. `~/.wide-research/.env` (recommended for global installs)
   4. shell environment
 
-The OpenAI credential is used by the host-side Agent runner and is not
-injected into sandboxes. Use TOML `secrets = [...]` only for credentials that
-the sandbox itself should be able to read.
+The OpenAI credential and base URL are used by the host-side Agent runner and
+are not injected into sandboxes. Use TOML `secrets = [...]` only for
+credentials that the sandbox itself should be able to read.
 
 ### Where things live
 
