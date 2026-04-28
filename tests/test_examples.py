@@ -98,3 +98,20 @@ def test_example_end_to_end(example: Path) -> None:
                 assert Path(value).exists(), (
                     f"output[{key}] path {value} does not exist locally"
                 )
+
+    # Summary + Modal manifest are now always written by the aggregator /
+    # orchestrator. Shape-check them so regressions don't drop the fields.
+    summary_path = run_dir / "summary.json"
+    assert summary_path.exists(), f"no summary.json at {summary_path}"
+    summary = json.loads(summary_path.read_text())
+    assert summary["succeeded"] >= 1
+    assert "cost" in summary, "summary.json missing cost section"
+    cost = summary["cost"]
+    assert cost["total_tokens"] > 0, "expected some tokens to have been used"
+    # priced or unpriced, we need to account for every subtask
+    assert cost["priced_subtasks"] + cost["unpriced_subtasks"] == summary["succeeded"] + summary["failed"]
+
+    modal_path = run_dir / "modal.json"
+    assert modal_path.exists(), f"no modal.json at {modal_path}"
+    modal_info = json.loads(modal_path.read_text())
+    assert modal_info.get("app_name"), "modal.json missing app_name"
