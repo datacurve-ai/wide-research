@@ -13,6 +13,7 @@ from agents.tool_context import ToolContext
 from wide_research import cli, doctor
 from wide_research.runner import (
     _collect_secrets,
+    _build_run_config,
     _make_submit_tool,
     _make_submit_tool_use_behavior,
     _missing_required_output_fields,
@@ -72,6 +73,17 @@ def test_load_env_precedence(monkeypatch, tmp_path) -> None:
 
     assert cli.os.environ["OPENAI_API_KEY"] == "extra"
     assert cli.os.environ["OPENAI_BASE_URL"] == "https://extra.example/api/"
+
+
+def test_custom_openai_base_url_uses_explicit_provider(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "respan-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://endpoint.respan.ai/api/")
+
+    run_config = _build_run_config(session=object(), manifest=object())
+    model = run_config.model_provider.get_model("openai/gpt-5.5")
+
+    assert run_config.tracing_disabled is True
+    assert getattr(model, "model", None) == "openai/gpt-5.5"
 
 
 def test_doctor_env_discovery_matches_run_precedence(monkeypatch, tmp_path) -> None:

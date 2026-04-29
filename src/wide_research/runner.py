@@ -14,6 +14,7 @@ import asyncio
 import io
 import json
 import logging
+import os
 import posixpath
 import tarfile
 import time
@@ -38,6 +39,7 @@ from agents.extensions.sandbox.modal import (
     ModalSandboxClientOptions,
     ModalSandboxSelector,
 )
+from agents.models.openai_provider import OpenAIProvider
 from agents.sandbox import Manifest as SdkManifest
 from agents.sandbox import SandboxAgent, SandboxRunConfig
 from agents.sandbox.entries import LocalDir, LocalFile
@@ -161,12 +163,30 @@ async def _run(
 
             client, options = _build_client(env=env, precreated=precreated_sb)
             emit("creating session")
-            session = await client.create(manifest=sdk_manifest, options=options)
+            session = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _create_session_blocking,
+                    client,
+                    sdk_manifest,
+                    options,
+                ),
+                timeout=_SESSION_CREATE_TIMEOUT_SECONDS,
+            )
         except asyncio.CancelledError:
+            if precreated_sb is not None:
+                try:
+                    await asyncio.to_thread(precreated_sb.terminate, wait=False)
+                except Exception as cleanup_exc:  # noqa: BLE001
+                    emit(f"precreated sandbox terminate failed during cancel: {cleanup_exc}")
             raise
         except Exception as exc:  # noqa: BLE001
             msg = f"sandbox_create_failed: {type(exc).__name__}: {exc}"
             emit(msg)
+            if precreated_sb is not None:
+                try:
+                    await asyncio.to_thread(precreated_sb.terminate, wait=False)
+                except Exception as cleanup_exc:  # noqa: BLE001
+                    emit(f"precreated sandbox terminate failed: {cleanup_exc}")
             elapsed = time.monotonic() - t_start
             notify(status="failed", phase="sandbox_create_failed", wall_s=elapsed)
             return Submission(
@@ -180,9 +200,7 @@ async def _run(
             notify(status="running", phase="agent_loop")
             sink: dict[str, Any] = {}
             agent = _build_agent(spec=spec, sink=sink, manifest=sdk_manifest, session=session)
-            run_cfg = RunConfig(
-                sandbox=SandboxRunConfig(session=session, manifest=sdk_manifest),
-            )
+            run_cfg = _build_run_config(session=session, manifest=sdk_manifest)
 
             subtask_dir.mkdir(parents=True, exist_ok=True)
             trajectory_path = subtask_dir / "trajectory.jsonl"
@@ -264,6 +282,21 @@ def _build_client(
     return client, options
 
 
+def _create_session_blocking(
+    client: ModalSandboxClient,
+    manifest: SdkManifest,
+    options: ModalSandboxClientOptions,
+):
+    """Run ModalSandboxClient.create outside the main event loop.
+
+    Some Modal/Agents SDK session creation failures block before yielding
+    back to asyncio, which makes `asyncio.wait_for(client.create(...))`
+    ineffective. Running the coroutine in a worker thread lets the main
+    orchestrator enforce a startup timeout and continue other subtasks.
+    """
+    return asyncio.run(client.create(manifest=manifest, options=options))
+
+
 async def _precreate_docker_sandbox(
     *,
     spec: SubtaskSpec,
@@ -335,6 +368,8 @@ _DEFAULT_RETRY = ModelRetrySettings(
     ),
 )
 
+_SESSION_CREATE_TIMEOUT_SECONDS = 180.0
+
 
 def _build_agent(
     *,
@@ -356,6 +391,23 @@ def _build_agent(
         tool_use_behavior=_make_submit_tool_use_behavior(sink),
         default_manifest=manifest,
     )
+
+
+def _build_run_config(*, session: Any, manifest: SdkManifest) -> RunConfig:
+    openai_base_url = (os.environ.get("OPENAI_BASE_URL") or "").strip()
+    openai_api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    custom_openai_base = bool(openai_base_url and "api.openai.com" not in openai_base_url)
+    run_cfg_kwargs: dict[str, Any] = {
+        "sandbox": SandboxRunConfig(session=session, manifest=manifest),
+        "tracing_disabled": custom_openai_base,
+    }
+    if custom_openai_base:
+        run_cfg_kwargs["model_provider"] = OpenAIProvider(
+            api_key=openai_api_key or None,
+            base_url=openai_base_url,
+            use_responses=True,
+        )
+    return RunConfig(**run_cfg_kwargs)
 
 
 async def _run_agent_loop(
