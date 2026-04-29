@@ -8,9 +8,15 @@ version = "0.2.0"
 description = "Run one OpenAI agent per input across N parallel Modal sandboxes, and aggregate structured results (plus returned files/folders) locally."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 authors = [{ name = "Datacurve" }]
 keywords = ["modal", "openai-agents", "sandbox", "agent", "batch", "map"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
 
 dependencies = [
     # CLI + output rendering
@@ -37,6 +43,7 @@ wr = "wide_research.cli:app"
 
 [project.urls]
 Homepage = "https://github.com/datacurve-ai/wide-research"
+Repository = "https://github.com/datacurve-ai/wide-research"
 Issues = "https://github.com/datacurve-ai/wide-research/issues"
 
 [tool.hatch.build.targets.wheel]
@@ -46,6 +53,7 @@ packages = ["src/wide_research"]
 include = [
     "src/wide_research",
     "README.md",
+    "LICENSE",
     "AGENTS.md",
     "docs/",
     "examples/",
