@@ -330,8 +330,10 @@ Fixed tool set per subtask:
   unified-diff-ish DSL. Prefer this over heredoc or `sed`.
 - **`view_image(path)`** — inline an image (screenshots, plots).
 - **`web_search(query)`** — OpenAI-hosted web search (runs off-sandbox).
-- **`submit(success, output, error?)`** — end the subtask. Call exactly
-  once. Calling it terminates the agent loop.
+- **`submit(success, output, error?, dangerously_bypass_required_fields?)`**
+  — end the subtask. Missing required fields are rejected with a tool message
+  so the agent can call `submit` again. Set the bypass flag only when a
+  required field is intentionally impossible to provide.
 
 Not provided: no `read_file` (use `exec_command("cat path")`), no
 `list_dir` (`ls -la`), no HTTP fetcher (`curl` or `web_search`).

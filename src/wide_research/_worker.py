@@ -1,9 +1,9 @@
 """Detached worker entry point.
 
 `wide-research run` spawns this as a subprocess, redirects its stdout +
-stderr to `<run_dir>/worker.log`, and returns immediately. The worker
-reads `<run_dir>/config.resolved.toml` (written by the CLI) and executes
-the full pipeline.
+stderr to `<run_dir>/worker.log`, and usually attaches a local tail while
+this process keeps running. The worker reads `<run_dir>/config.resolved.toml`
+(written by the CLI) and executes the full pipeline.
 
 Signals:
 - SIGTERM / SIGINT: cancel the current run gracefully. The runner's

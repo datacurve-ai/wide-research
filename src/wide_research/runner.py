@@ -31,7 +31,7 @@ from agents import (
     function_tool,
     retry_policies,
 )
-from agents.agent import StopAtTools
+from agents.agent import ToolsToFinalOutputResult
 from agents.extensions.sandbox.modal import (
     ModalImageSelector,
     ModalSandboxClient,
@@ -224,7 +224,9 @@ async def _run(
                 )
 
             elapsed = time.monotonic() - t_start
+            previous_meta = payload.get("meta") or {}
             payload["meta"] = {
+                **previous_meta,
                 "wall_seconds": elapsed,
                 "runner_note": run_error,
                 "cost": cost.to_dict(),
@@ -347,11 +349,11 @@ def _build_agent(
         model=spec.model,
         model_settings=ModelSettings(retry=_DEFAULT_RETRY),
         tools=[
-            _make_submit_tool(sink),
+            _make_submit_tool(sink, spec.output_schema),
             _make_wait_for_tool(session),
             WebSearchTool(),
         ],
-        tool_use_behavior=StopAtTools(stop_at_tool_names=["submit"]),
+        tool_use_behavior=_make_submit_tool_use_behavior(sink),
         default_manifest=manifest,
     )
 
@@ -537,11 +539,16 @@ def _extract_usage(result: Any) -> Any:
 
 def _payload_from_sink(sink: dict[str, Any], run_error: str | None) -> Submission:
     if sink:
-        return Submission(
+        payload = Submission(
             success=bool(sink.get("success")),
             output=sink.get("output") or {},
             error=sink.get("error"),
         )
+        if sink.get("required_fields_bypassed"):
+            payload["meta"] = {
+                "required_fields_bypassed": sink["required_fields_bypassed"],
+            }
+        return payload
     return Submission(
         success=False,
         output={},
@@ -564,7 +571,12 @@ def _system_instructions(spec: SubtaskSpec) -> str:
         "Call `submit(success=true, output={...})` with one key per REQUIRED "
         "output field listed below. Optional fields may be omitted. On "
         "unrecoverable failure, call `submit(success=false, error='...')`. "
-        "Calling submit ends the task.",
+        "Calling submit ends the task once the payload is accepted.",
+        "",
+        "`submit` checks required fields at runtime. If it returns a message "
+        "about missing fields, fix the output and call `submit` again. Only "
+        "set `dangerously_bypass_required_fields=true` when a required field "
+        "is intentionally impossible to provide.",
         "",
         "Output fields:",
     ]
@@ -659,16 +671,38 @@ def _make_wait_for_tool(session: Any):
     return wait_for
 
 
-def _make_submit_tool(sink: dict[str, Any]):
+def _make_submit_tool_use_behavior(sink: dict[str, Any]):
+    """Stop the agent only after `submit` has accepted and populated `sink`."""
+
+    def tool_use_behavior(_context: Any, tool_results: list[Any]) -> ToolsToFinalOutputResult:
+        for tool_result in tool_results:
+            tool = getattr(tool_result, "tool", None)
+            name = getattr(tool, "name", None)
+            qualified_name = getattr(tool, "qualified_name", None)
+            if name == "submit" or qualified_name == "submit":
+                if sink:
+                    return ToolsToFinalOutputResult(
+                        is_final_output=True,
+                        final_output=getattr(tool_result, "output", None),
+                    )
+                return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
+        return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
+
+    return tool_use_behavior
+
+
+def _make_submit_tool(sink: dict[str, Any], output_schema: list[dict[str, Any]]):
     """Return a function_tool closed over `sink`. Calling it populates the
-    sink and returns; StopAtTools ends the loop."""
+    sink and returns; tool_use_behavior ends the loop only after acceptance."""
 
     @function_tool(
         name_override="submit",
         description_override=(
             "Submit the final structured result for this subtask. Exactly one "
             "call ends the task. Pass success=true with a populated `output` "
-            "dict, or success=false with a human-readable `error` string."
+            "dict, or success=false with a human-readable `error` string. "
+            "If required fields are intentionally impossible to provide, set "
+            "dangerously_bypass_required_fields=true."
         ),
         strict_mode=False,
     )
@@ -676,13 +710,53 @@ def _make_submit_tool(sink: dict[str, Any]):
         success: bool,
         output: dict[str, Any] | None = None,
         error: str | None = None,
+        dangerously_bypass_required_fields: bool = False,
     ) -> str:
+        if output is not None and not isinstance(output, dict):
+            return "submit rejected: `output` must be an object/dict. Please call submit again."
+        missing = _missing_required_output_fields(
+            output_schema=output_schema,
+            success=success,
+            output=output or {},
+        )
+        if missing and not dangerously_bypass_required_fields:
+            fields = ", ".join(missing)
+            return (
+                "submit rejected: missing required output field(s): "
+                f"{fields}. Add these fields and call submit again. If the fields are "
+                "intentionally impossible to provide, call submit with "
+                "dangerously_bypass_required_fields=true and explain why in `error`."
+            )
         sink["success"] = bool(success)
         sink["output"] = output or {}
         sink["error"] = error
+        if missing:
+            sink["required_fields_bypassed"] = missing
         return "submitted"
 
     return submit
+
+
+def _missing_required_output_fields(
+    *,
+    output_schema: list[dict[str, Any]],
+    success: bool,
+    output: dict[str, Any],
+) -> list[str]:
+    """Return required output field names omitted from a successful submit."""
+    if not success:
+        return []
+    missing: list[str] = []
+    for field_spec in output_schema:
+        if not field_spec.get("required", True):
+            continue
+        name = field_spec["name"]
+        if name not in output or output[name] is None:
+            missing.append(name)
+            continue
+        if field_spec["type"] in ("file", "directory") and not str(output[name]).strip():
+            missing.append(name)
+    return missing
 
 
 # ── SDK Manifest entries from upload map ────────────────────────────────────

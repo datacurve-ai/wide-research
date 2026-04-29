@@ -31,7 +31,7 @@ format = "free text is fine"
 | `prompt_template` | string | Jinja2 template; `{{ input }}` is interpolated. May contain `<file>/abs/path</file>` tags. |
 | `target_count` | integer | Must equal `len(inputs)` (guards against truncated pastes). |
 | `inputs` | array of string | One subtask per element. |
-| `output_schema` | array of table | Each entry: `{name, type, title, description, format?, required?}`. `type` ∈ `string`/`number`/`boolean`/`file`/`directory`. Field `name` must be `snake_case`. `required` defaults to `true`; set `false` to let the agent omit the field (missing file/dir paths are silently skipped during collection). |
+| `output_schema` | array of table | Each entry: `{name, type, title, description, format?, required?}`. `type` ∈ `string`/`number`/`boolean`/`file`/`directory`. Field `name` must be `snake_case`. `required` defaults to `true`; set `false` to let the agent omit the field. Missing required fields are rejected by `submit` unless the agent explicitly sets `dangerously_bypass_required_fields=true`. |
 
 ## Optional keys + defaults
 

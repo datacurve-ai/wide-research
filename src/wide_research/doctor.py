@@ -3,7 +3,7 @@
 Reports:
 - CLI is importable + version
 - Modal is installed and has a configured token
-- OpenAI credential is reachable (any of: env var, tool-home .env, CWD .env)
+- OpenAI credential is reachable using the same precedence as `wr run`
 - Optional OpenAI-compatible base URL if configured
 - ~/.wide-research layout is sane
 - A brief summary of where runs will be written
@@ -29,12 +29,12 @@ class Check:
     detail: str
 
 
-def run_checks() -> list[Check]:
+def run_checks(env_file: Path | None = None) -> list[Check]:
     return [
         _check_package(),
         _check_modal_token(),
-        _check_openai_key(),
-        _check_openai_base_url(),
+        _check_openai_key(env_file),
+        _check_openai_base_url(env_file),
         _check_tool_home(),
         _check_runs_root(),
     ]
@@ -63,17 +63,11 @@ def _check_modal_token() -> Check:
     )
 
 
-def _check_openai_key() -> Check:
+def _check_openai_key(env_file: Path | None) -> Check:
     # Does not contact OpenAI — just confirms a key is reachable.
-    if os.environ.get("OPENAI_API_KEY"):
-        return Check("OPENAI_API_KEY", True, "present in shell env")
-    for candidate in (
-        Path.cwd() / ".env",
-        paths.tool_home() / ".env",
-    ):
-        if candidate.exists():
-            if dotenv_values(candidate).get("OPENAI_API_KEY"):
-                return Check("OPENAI_API_KEY", True, f"{candidate}")
+    source = _credential_source("OPENAI_API_KEY", env_file)
+    if source is not None:
+        return Check("OPENAI_API_KEY", True, source)
     return Check(
         "OPENAI_API_KEY", False,
         f"set it in {paths.tool_home() / '.env'} (chmod 600), "
@@ -81,18 +75,34 @@ def _check_openai_key() -> Check:
     )
 
 
-def _check_openai_base_url() -> Check:
+def _check_openai_base_url(env_file: Path | None) -> Check:
     # Optional. If present, the OpenAI client/Agents SDK will route through it.
-    if os.environ.get("OPENAI_BASE_URL"):
-        return Check("OPENAI_BASE_URL", True, "present in shell env")
-    for candidate in (
-        Path.cwd() / ".env",
-        paths.tool_home() / ".env",
-    ):
-        if candidate.exists():
-            if dotenv_values(candidate).get("OPENAI_BASE_URL"):
-                return Check("OPENAI_BASE_URL", True, f"{candidate}")
+    source = _credential_source("OPENAI_BASE_URL", env_file)
+    if source is not None:
+        return Check("OPENAI_BASE_URL", True, source)
     return Check("OPENAI_BASE_URL", True, "not set; using OpenAI default")
+
+
+def _credential_source(name: str, env_file: Path | None = None) -> str | None:
+    """Return the winning source for an env var using `wr run` precedence."""
+    for candidate in (env_file, Path.cwd() / ".env", paths.tool_home() / ".env"):
+        if candidate and candidate.exists() and dotenv_values(candidate).get(name):
+            return str(candidate)
+    if os.environ.get(name):
+        return "present in shell env"
+    repo_env = _repo_env_if_source_install()
+    if repo_env and repo_env.exists() and dotenv_values(repo_env).get(name):
+        return str(repo_env)
+    return None
+
+
+def _repo_env_if_source_install() -> Path | None:
+    """Return `<repo>/.env` when running from a source checkout, else None."""
+    here = Path(__file__).resolve()
+    for p in here.parents:
+        if (p / "pyproject.toml").exists() and (p / "src" / "wide_research").exists():
+            return p / ".env"
+    return None
 
 
 def _check_tool_home() -> Check:

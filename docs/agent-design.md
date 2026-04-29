@@ -90,7 +90,7 @@ Almost all tools come from the SDK:
 | `apply_patch(patch)` | SDK `Filesystem` capability | Write / create / delete files via a unified-diff-ish patch format. |
 | `view_image(path)` | SDK `Filesystem` capability | Read images out of the sandbox. |
 | `web_search` | `agents.tool.WebSearchTool()` | OpenAI-hosted web search. No sandbox involvement. |
-| `submit(success, output, error)` | Ours | Structured completion. Populates a host-side sink; `StopAtTools` ends the loop. |
+| `submit(success, output, error, dangerously_bypass_required_fields)` | Ours | Structured completion. Required fields are validated before the host-side sink is populated; accepted submissions end the loop. |
 
 We don't implement a custom `shell` or `write_file` anymore — the SDK's
 capabilities already route through the Modal session, so re-implementing them
@@ -186,7 +186,9 @@ you expect big image builds.
   outputs after `Runner.run` returns. Also makes cleanup explicit: our
   `finally:` always calls `session.stop() + client.delete(session)`.
 - **Sink, not file, for the submit payload.** The agent runs on the host now,
-  so a simple closure-captured dict is fine — no disk round-trip needed.
+  so a simple closure-captured dict is fine — no disk round-trip needed. A
+  rejected submit leaves the sink empty, so the tool output goes back to the
+  agent for another attempt instead of ending the loop.
 - **One sandbox per subtask, not a pool.** Clean isolation: a crash or
   timeout in one subtask can't touch its neighbours. We pay ~5 s per sandbox
   cold-start, which is acceptable for agent runs that already take tens of

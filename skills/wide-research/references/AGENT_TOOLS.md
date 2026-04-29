@@ -50,12 +50,17 @@ sandbox, no network config required. Use it freely.
 
 ## Submit (wide-research–specific)
 
-**`submit(success, output, error?)`** — end the subtask with a typed result.
+**`submit(success, output, error?, dangerously_bypass_required_fields?)`** —
+end the subtask with a typed result.
 
 - `success=true, output={…}` — one key per field in `output_schema`.
 - `success=false, error="reason"` — unrecoverable failure.
+- Missing required fields are rejected with a tool message so you can fix the
+  output and call `submit` again.
+- Set `dangerously_bypass_required_fields=true` only when a required field is
+  intentionally impossible to provide; explain why in `error`.
 
-Calling `submit` terminates the agent loop. Call it exactly once.
+An accepted `submit` terminates the agent loop. Call it once successfully.
 
 ## Intentionally not provided
 

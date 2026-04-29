@@ -1,8 +1,9 @@
 """wide-research CLI.
 
-`run` is async by default — it spawns a detached worker, prints the run
-dir + PID + follow-up hints, and returns. Use `--foreground` / `-f` to
-block the current terminal instead.
+`run` defaults to spawn-detached + auto-tail: it starts a worker process,
+prints the run dir + PID, then follows the live merged log in this terminal.
+Use `--detach` / `-d` to exit immediately or `--foreground` / `-f` to run
+in-process.
 
 Two complementary log streams per run:
 - `wr tail <run>` — live stream of what each subtask is doing (recommended).
@@ -10,8 +11,9 @@ Two complementary log streams per run:
 
 Commands:
     wide-research doctor                           # check install + credentials
-    wide-research run    CONFIG.toml [flags...]    # detached; prints run dir + log path
+    wide-research run    CONFIG.toml [flags...]    # detached worker + live tail
     wide-research run    CONFIG.toml --foreground  # block until done
+    wide-research run    CONFIG.toml --detach      # spawn and exit immediately
     wide-research run    - < CONFIG.toml           # read config from stdin
     wide-research run    --inline 'TOML'           # inline string
     wide-research plan   CONFIG.toml [--index N]   # render one prompt, no sandbox
@@ -136,9 +138,11 @@ def _resolve_run_dir(
 
 
 @app.command("doctor")
-def cmd_doctor() -> None:
+def cmd_doctor(
+    env_file: Path | None = typer.Option(None, "--env-file", help="Check OPENAI_API_KEY etc. from this file."),
+) -> None:
     """Check local install + credentials. Non-zero exit if anything is missing."""
-    results = doctor_mod.run_checks()
+    results = doctor_mod.run_checks(env_file=env_file)
     table = Table("check", "status", "detail", show_header=True)
     any_bad = False
     for chk in results:

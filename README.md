@@ -40,7 +40,8 @@ source .venv/bin/activate
 
 ### Credentials
 
-`wide-research doctor` will tell you what's missing. Short version:
+`wide-research doctor` will tell you what's missing. If you use a custom env
+file, check it with `wide-research doctor --env-file PATH`. Short version:
 
 - Modal: `modal token set --token-id … --token-secret …`
 - `OPENAI_API_KEY` and optional `OPENAI_BASE_URL` — any of (first hit wins):
@@ -48,6 +49,7 @@ source .venv/bin/activate
   2. `./.env` (current directory)
   3. `~/.wide-research/.env` (recommended for global installs)
   4. shell environment
+  5. repo `.env` (source checkouts only)
 
 The OpenAI credential and base URL are used by the host-side Agent runner and
 are not injected into sandboxes. Use TOML `secrets = [...]` only for
@@ -65,14 +67,14 @@ Override with `WIDE_RESEARCH_HOME=/somewhere/else` (whole base) or
 
 ## Quickstart
 
-`wide-research run` is **async by default** — it spawns a detached worker,
-prints where to find the logs, and exits immediately. Use `wr wait` / `wr
-tail` to follow. Pass `--foreground` / `-f` if you want it to block.
+`wide-research run` defaults to **spawn-detached + auto-tail**: it starts a
+worker process, then follows the live merged log in your terminal. Ctrl+C only
+detaches the tail; the worker keeps running. Use `--detach` / `-d` to spawn and
+exit immediately, or `--foreground` / `-f` to run in-process for scripts/CI.
 
 ```bash
 # 1. Smallest smoke test (3 subtasks, ~15s)
 wide-research run examples/echo_test.toml
-wide-research wait ~/.wide-research/runs/<dir>    # block for the summary
 
 # 2. Dry-run — validate a config without spawning sandboxes
 wide-research run path/to/your.toml --dry-run
@@ -80,10 +82,10 @@ wide-research run path/to/your.toml --dry-run
 # 3. Render just the first prompt
 wide-research plan path/to/your.toml --index 0
 
-# 4. Smoke-test, then full run. Use -f / --foreground if you want the
-#    CLI to block in the current terminal:
+# 4. Smoke-test, then full run. Use -f / --foreground for scripts/CI:
 wide-research run path/to/your.toml --sample 5 --foreground
-wide-research run path/to/your.toml               # detaches; wr wait to sync
+wide-research run path/to/your.toml               # detaches, then auto-tails
+wide-research run path/to/your.toml --detach      # pure detached; wr wait to sync
 
 # 5. Look at past runs
 wide-research list
@@ -155,7 +157,8 @@ wr plan - < my-config.toml
 
 ## Watching a run
 
-`wr run` detaches by default and prints the run dir + pid + hints. Follow along with:
+`wr run` prints the run dir + pid and auto-tails by default. For a run started
+with `--detach`, or after Ctrl+C detaches the tail, follow along with:
 
 ```bash
 wr tail ~/.wide-research/runs/<dir>        # watch what each subtask is doing
@@ -168,6 +171,18 @@ wr stop ~/.wide-research/runs/<dir>
 # Or, if you'd rather have `run` block the current terminal:
 wr run job.toml --foreground
 ```
+
+## Cost Estimates
+
+Run summaries include token usage and best-effort cost estimates. By default,
+wide-research fetches the public OpenRouter model catalog from
+`https://openrouter.ai/api/v1/models` and caches it under
+`~/.wide-research/cache/` for a week. Set `WR_DISABLE_PRICE_FETCH=1` to avoid
+that network request, or provide your own prices with `WR_PRICE_TABLE_JSON`.
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).
 
 ## Layout
 
