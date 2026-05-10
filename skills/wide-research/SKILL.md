@@ -1,7 +1,7 @@
 ---
 name: wide-research
 description: Fan out one OpenAI agent per input across N parallel Modal sandboxes and aggregate structured results (plus returned files/folders). Use it whenever the task is "do the same operation to N independent items" — wide search, wide fix, wide extraction — with N ≥ 5.
-compatibility: Requires the `wide-research` CLI on PATH (install via `uv tool install git+https://github.com/datacurve-ai/wide-research`), a configured `modal` token, and an `OPENAI_API_KEY`. Run `wide-research doctor` to verify.
+compatibility: Requires the `wide-research` CLI on PATH (install via `uv tool install wide-research`), a configured `modal` token, and an `OPENAI_API_KEY`. Run `wide-research doctor` to verify.
 ---
 
 # wide-research
@@ -36,9 +36,11 @@ Invoke wide-research when **all three** are true:
 ## Setup (once per machine)
 
 ```bash
-uv tool install git+https://github.com/datacurve-ai/wide-research
+uv tool install wide-research
 wide-research doctor            # verify modal token + OPENAI_API_KEY + paths
 ```
+
+Package: https://pypi.org/project/wide-research/
 
 If `doctor` flags missing pieces:
 

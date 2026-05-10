@@ -1,33 +1,33 @@
 # wide-research
 
-Spawn parallel subtasks in Modal sandboxes — each running an OpenAI Agent on
-one input from a shared prompt template — and aggregate structured results
-(plus files or folders) back to your machine.
+Spawn thousands of sub-agents in parallel. Pass in a list of strings, files,
+or folders, get back structured data and generated artifacts.
 
-Think `Pool.map()` for research agents.
+Each subtask gets its own Modal sandbox and its own OpenAI
+Agents SDK agent.
+The agent has shell + file-edit + web-search tools plus a
+single `submit(...)` that ends the task. Results come back as JSON / CSV
+rows plus any files or folders the agent wrote.
 
 ## Install
 
-### CLI
+### Add the skill
+
+```bash
+npx skills add datacurve-ai/wide-research
+```
+
+This is the primary way to use wide-research from an agent. The skill teaches
+the agent when to fan out work, how to write job configs, and how to collect
+the outputs.
+
+### Install the CLI from PyPI
 
 ```bash
 uv tool install wide-research
 wide-research --help         # or the short alias: wr --help
 wide-research doctor         # check credentials + paths
 ```
-
-`uv tool install` puts `wide-research` and `wr` on your PATH in an isolated
-`uv`-managed environment. Upgrade with `uv tool install --reinstall wide-research`;
-uninstall with `uv tool uninstall wide-research`.
-
-### As a skill
-
-```bash
-npx skills add datacurve-ai/wide-research
-```
-
-Skill layout follows [agentskills.io](https://agentskills.io/specification).
-You still need the CLI installed (above).
 
 ### From source (for development)
 
