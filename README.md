@@ -11,13 +11,13 @@ Think `Pool.map()` for research agents.
 ### CLI
 
 ```bash
-uv tool install git+https://github.com/datacurve-ai/wide-research
+uv tool install wide-research
 wide-research --help         # or the short alias: wr --help
 wide-research doctor         # check credentials + paths
 ```
 
 `uv tool install` puts `wide-research` and `wr` on your PATH in an isolated
-`uv`-managed environment. Upgrade with `uv tool install --reinstall …`;
+`uv`-managed environment. Upgrade with `uv tool install --reinstall wide-research`;
 uninstall with `uv tool uninstall wide-research`.
 
 ### As a skill
@@ -34,7 +34,7 @@ You still need the CLI installed (above).
 ```bash
 git clone https://github.com/datacurve-ai/wide-research ~/code/wide-research
 cd ~/code/wide-research
-uv venv --python 3.12 && uv pip install -e .
+uv sync --extra test
 source .venv/bin/activate
 ```
 
@@ -73,25 +73,44 @@ detaches the tail; the worker keeps running. Use `--detach` / `-d` to spawn and
 exit immediately, or `--foreground` / `-f` to run in-process for scripts/CI.
 
 ```bash
-# 1. Smallest smoke test (3 subtasks, ~15s)
-wide-research run examples/echo_test.toml
+# 1. Create the smallest smoke-test config.
+cat > echo.toml <<'EOF'
+brief = "Echo each input."
+name = "echo_test"
+title = "Echo Test"
+target_count = 3
+inputs = ["alpha", "beta", "gamma"]
+
+prompt_template = """
+Return the input exactly, then call submit(success=true, output={"echo": "{{ input }}"}).
+"""
+
+[[output_schema]]
+name = "echo"
+type = "string"
+title = "Echo"
+description = "The echoed input."
+EOF
 
 # 2. Dry-run — validate a config without spawning sandboxes
-wide-research run path/to/your.toml --dry-run
+wide-research run echo.toml --dry-run
 
 # 3. Render just the first prompt
-wide-research plan path/to/your.toml --index 0
+wide-research plan echo.toml --index 0
 
 # 4. Smoke-test, then full run. Use -f / --foreground for scripts/CI:
-wide-research run path/to/your.toml --sample 5 --foreground
-wide-research run path/to/your.toml               # detaches, then auto-tails
-wide-research run path/to/your.toml --detach      # pure detached; wr wait to sync
+wide-research run echo.toml --sample 1 --foreground
+wide-research run echo.toml               # detaches, then auto-tails
+wide-research run echo.toml --detach      # pure detached; wr wait to sync
 
 # 5. Look at past runs
 wide-research list
 wide-research inspect ~/.wide-research/runs/<dir>
 wide-research inspect ~/.wide-research/runs/<dir> --failed-only
 ```
+
+If you cloned the repository, you can also run the checked-in examples under
+[`examples/`](examples/).
 
 ## Config shape
 
@@ -183,6 +202,18 @@ that network request, or provide your own prices with `WR_PRICE_TABLE_JSON`.
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
+
+## Publishing
+
+Maintainers can build and validate the package locally with:
+
+```bash
+uv build
+uvx twine check dist/*
+```
+
+Publish with `uv publish` after the package version has been bumped and the
+Modal/OpenAI example tests pass with live credentials.
 
 ## Layout
 
