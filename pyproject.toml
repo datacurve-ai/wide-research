@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wide-research"
-version = "0.2.1"
+version = "0.2.2"
 description = "Spawn thousands of sub-agents in parallel. Pass in strings, files, or folders, get back structured data and generated artifacts."
 readme = "README.md"
 requires-python = ">=3.11"

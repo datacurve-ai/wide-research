@@ -33,6 +33,7 @@ from agents import (
     retry_policies,
 )
 from agents.agent import ToolsToFinalOutputResult
+from openai.types.shared import Reasoning
 from agents.extensions.sandbox.modal import (
     ModalImageSelector,
     ModalSandboxClient,
@@ -80,6 +81,7 @@ class SubtaskSpec:
     output_schema: list[dict[str, Any]]
     workdir: str
     upload_files: dict[str, str] = field(default_factory=dict)
+    reasoning_effort: str | None = None
 
 
 @dataclass(slots=True)
@@ -382,7 +384,11 @@ def _build_agent(
         name=f"{spec.name}/{spec.index}",
         instructions=_system_instructions(spec),
         model=spec.model,
-        model_settings=ModelSettings(retry=_DEFAULT_RETRY),
+        model_settings=ModelSettings(
+            retry=_DEFAULT_RETRY,
+            reasoning=Reasoning.model_construct(effort=spec.reasoning_effort)
+            if spec.reasoning_effort else None,
+        ),
         tools=[
             _make_submit_tool(sink, spec.output_schema),
             _make_wait_for_tool(session),

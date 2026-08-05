@@ -177,7 +177,8 @@ pull). Missing scalar fields land as empty strings in `results.csv`.
 ### Optional top-level keys + defaults
 
 ```toml
-model = "openai/gpt-5.5"          # any model the Agents SDK can resolve
+model = "openai/gpt-5.6-sol"      # any model the Agents SDK can resolve
+# reasoning_effort = "high"       # unset = model/provider default
 parallelism = 0                   # 0/unset = unbounded (all at once)
 max_turns = 100                   # per subtask
 timeout_seconds = 1800            # per subtask wall clock — NOT the whole batch

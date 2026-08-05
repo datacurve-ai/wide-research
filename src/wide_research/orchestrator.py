@@ -157,6 +157,7 @@ def _build_specs(cfg: WideResearchConfig) -> list[SubtaskSpec]:
                 output_schema=schema,
                 workdir=cfg.image.workdir,
                 upload_files=upload,
+                reasoning_effort=cfg.reasoning_effort,
             )
         )
     return specs
