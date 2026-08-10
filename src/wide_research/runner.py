@@ -43,6 +43,7 @@ from agents.extensions.sandbox.modal import (
 from agents.models.openai_provider import OpenAIProvider
 from agents.sandbox import Manifest as SdkManifest
 from agents.sandbox import SandboxAgent, SandboxRunConfig
+from agents.sandbox.capabilities import Compaction, Shell
 from agents.sandbox.entries import LocalDir, LocalFile
 from agents.tool import WebSearchTool
 
@@ -419,6 +420,12 @@ def _build_agent(
     ]
     if not on_openrouter:
         tools.append(WebSearchTool())
+    capabilities = None
+    if on_openrouter and spec.model.startswith("moonshotai/"):
+        # Kimi's OpenRouter fallback providers accept function tools but reject
+        # the SDK's custom apply_patch tool. Kimi jobs use exec_command for
+        # workspace writes, so retain shell + compaction and omit filesystem.
+        capabilities = [Shell(), Compaction()]
     return SandboxAgent(
         name=f"{spec.name}/{spec.index}",
         instructions=_system_instructions(spec),
@@ -431,6 +438,7 @@ def _build_agent(
         tools=tools,
         tool_use_behavior=_make_submit_tool_use_behavior(sink),
         default_manifest=manifest,
+        **({"capabilities": capabilities} if capabilities is not None else {}),
     )
 
 
