@@ -386,13 +386,19 @@ def _openrouter_model_settings(
     the Responses path. session_id pins the provider for the whole subtask.
     """
     session_id = f"wr:{spec.name}:{spec.index}"
+    extra_body: dict[str, Any] = {
+        "cache_control": {"type": "ephemeral"},
+        "session_id": session_id,
+    }
+    if spec.model.startswith("moonshotai/"):
+        extra_body["provider"] = {
+            "order": ["fireworks"],
+            "allow_fallbacks": False,
+        }
     return ModelSettings(
         retry=_DEFAULT_RETRY,
         reasoning=reasoning,
-        extra_body={
-            "cache_control": {"type": "ephemeral"},
-            "session_id": session_id,
-        },
+        extra_body=extra_body,
         extra_headers={"x-session-id": session_id},
     )
 
