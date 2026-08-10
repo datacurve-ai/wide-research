@@ -410,13 +410,14 @@ def _build_agent(
     )
     openai_base_url = (os.environ.get("OPENAI_BASE_URL") or "").lower()
     on_openrouter = "openrouter.ai" in openai_base_url
-    # OpenAI models via OpenRouter reject the openrouter:web_search tool type
-    # that WebSearchTool injects into Responses requests.
+    # OpenRouter may route a model across providers that reject its
+    # openrouter:web_search extension. Keep requests provider-portable; jobs can
+    # still perform bounded lookups with curl from the sandbox.
     tools: list[Any] = [
         _make_submit_tool(sink, spec.output_schema),
         _make_wait_for_tool(session),
     ]
-    if not (on_openrouter and spec.model.startswith("openai/")):
+    if not on_openrouter:
         tools.append(WebSearchTool())
     return SandboxAgent(
         name=f"{spec.name}/{spec.index}",
