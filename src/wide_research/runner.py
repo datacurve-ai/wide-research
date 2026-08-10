@@ -373,6 +373,29 @@ _DEFAULT_RETRY = ModelRetrySettings(
 _SESSION_CREATE_TIMEOUT_SECONDS = 180.0
 
 
+def _openrouter_model_settings(
+    *,
+    spec: SubtaskSpec,
+    reasoning: Reasoning | None,
+) -> ModelSettings:
+    """OpenRouter Anthropic caching needs an explicit top-level cache_control.
+
+    The Agents SDK already sends prompt_cache_key, which OpenRouter can use for
+    sticky routing, but Anthropic-family models still require cache_control on
+    the Responses path. session_id pins the provider for the whole subtask.
+    """
+    session_id = f"wr:{spec.name}:{spec.index}"
+    return ModelSettings(
+        retry=_DEFAULT_RETRY,
+        reasoning=reasoning,
+        extra_body={
+            "cache_control": {"type": "ephemeral"},
+            "session_id": session_id,
+        },
+        extra_headers={"x-session-id": session_id},
+    )
+
+
 def _build_agent(
     *,
     spec: SubtaskSpec,
@@ -380,20 +403,31 @@ def _build_agent(
     manifest: SdkManifest,
     session: Any,
 ) -> SandboxAgent:
+    reasoning = (
+        Reasoning.model_construct(effort=spec.reasoning_effort)
+        if spec.reasoning_effort
+        else None
+    )
+    openai_base_url = (os.environ.get("OPENAI_BASE_URL") or "").lower()
+    on_openrouter = "openrouter.ai" in openai_base_url
+    # OpenAI models via OpenRouter reject the openrouter:web_search tool type
+    # that WebSearchTool injects into Responses requests.
+    tools: list[Any] = [
+        _make_submit_tool(sink, spec.output_schema),
+        _make_wait_for_tool(session),
+    ]
+    if not (on_openrouter and spec.model.startswith("openai/")):
+        tools.append(WebSearchTool())
     return SandboxAgent(
         name=f"{spec.name}/{spec.index}",
         instructions=_system_instructions(spec),
         model=spec.model,
-        model_settings=ModelSettings(
-            retry=_DEFAULT_RETRY,
-            reasoning=Reasoning.model_construct(effort=spec.reasoning_effort)
-            if spec.reasoning_effort else None,
+        model_settings=(
+            _openrouter_model_settings(spec=spec, reasoning=reasoning)
+            if on_openrouter
+            else ModelSettings(retry=_DEFAULT_RETRY, reasoning=reasoning)
         ),
-        tools=[
-            _make_submit_tool(sink, spec.output_schema),
-            _make_wait_for_tool(session),
-            WebSearchTool(),
-        ],
+        tools=tools,
         tool_use_behavior=_make_submit_tool_use_behavior(sink),
         default_manifest=manifest,
     )
