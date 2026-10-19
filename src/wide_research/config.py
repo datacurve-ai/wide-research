@@ -150,5 +150,7 @@ class WideResearchConfig(BaseModel):
 
     def sample(self, n: int) -> "WideResearchConfig":
         """Return a copy with only the first `n` inputs (for smoke tests)."""
+        if n < 0:
+            raise ValueError("sample size must be non-negative")
         n = min(n, len(self.inputs))
         return self.model_copy(update={"inputs": self.inputs[:n], "target_count": n})

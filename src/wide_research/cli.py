@@ -201,6 +201,9 @@ def cmd_run(
     )
     cfg, source_text, source_path = _load_config(config_arg=config, inline=inline)
     if sample is not None:
+        if sample < 0:
+            console.print("[red]error:[/red] --sample must be non-negative")
+            raise typer.Exit(2)
         cfg = cfg.sample(sample)
 
     if dry_run:
